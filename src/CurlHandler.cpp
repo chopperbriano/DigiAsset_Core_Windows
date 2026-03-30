@@ -106,7 +106,19 @@ namespace CurlHandler {
 
         //make get request
         FILE* fp;
+#ifdef _WIN32
+        errno_t err = fopen_s(&fp, fileName.c_str(), "wb");
+        if (err != 0 || fp == NULL) {
+            curl_easy_cleanup(curl);
+            throw runtime_error("Failed to open file for writing: " + fileName);
+        }
+#else
         fp = fopen(fileName.c_str(), "wb");
+        if (fp == NULL) {
+            curl_easy_cleanup(curl);
+            throw runtime_error("Failed to open file for writing: " + fileName);
+        }
+#endif
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeData);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
@@ -139,7 +151,19 @@ namespace CurlHandler {
 
         //make post request
         FILE* fp;
+#ifdef _WIN32
+        errno_t err = fopen_s(&fp, fileName.c_str(), "wb");
+        if (err != 0 || fp == NULL) {
+            curl_easy_cleanup(curl);
+            throw runtime_error("Failed to open file for writing: " + fileName);
+        }
+#else
         fp = fopen(fileName.c_str(), "wb");
+        if (fp == NULL) {
+            curl_easy_cleanup(curl);
+            throw runtime_error("Failed to open file for writing: " + fileName);
+        }
+#endif
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeData);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);

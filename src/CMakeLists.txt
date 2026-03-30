@@ -59,7 +59,11 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 set(CMAKE_CXX_STANDARD 11)
 FIND_PACKAGE(JSONCPP REQUIRED)
 FIND_PACKAGE(JSONRPCCPP REQUIRED)
-find_package(CURL REQUIRED)
+find_package(CURL)
+
+# Add include directories for libjson-rpc-cpp and jsoncpp
+include_directories("${CMAKE_SOURCE_DIR}/jsoncpp/install/include")
+include_directories("${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/include")
 
 #add_library(ldigibyteapi STATIC IMPORTED)
 add_library(lsqlite3 STATIC IMPORTED)
@@ -113,6 +117,9 @@ set(SOURCE_FILES
         Threaded.cpp
         ChainAnalyzer.cpp
         Database.cpp
+        sqlite3.c
+        curl_stubs.cpp
+        openssl_stubs.cpp
         DigiByteCore.cpp
         Blob.cpp
         BitIO.cpp
@@ -144,20 +151,46 @@ set(SOURCE_FILES
         Database_LockedStatement.cpp
         crypto/ripemd.c
         crypto/SHA256.cpp
+        jsonrpccpp/common/exception.cpp
+        jsonrpccpp/common/errors.cpp
+        jsonrpccpp/common/procedure.cpp
+        jsonrpccpp/common/specificationparser.cpp
+        jsonrpccpp/common/specificationwriter.cpp
+        jsonrpccpp/common/streamreader.cpp
+        jsonrpccpp/common/streamwriter.cpp
+        jsonrpccpp/client/client.cpp
+        jsonrpccpp/client/connectors/httpclient.cpp
         )
 
 add_executable(digiasset_core main.cpp ${SOURCE_FILES} ${HEADER_FILES} ${RPC_METHODS_FILES})
 
-target_link_libraries(digiasset_core PRIVATE CURL::libcurl)
+# Link jsoncpp explicitly
+target_link_libraries(digiasset_core PRIVATE "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
+target_link_libraries(digiasset_core PRIVATE "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-common.lib")
+target_link_libraries(digiasset_core PRIVATE "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-client.lib")
+
+if(CURL_FOUND)
+  target_link_libraries(digiasset_core PRIVATE CURL::libcurl)
+endif()
 
 # Platform-specific libraries.
 if(WIN32)
-  find_package(SQLite3 REQUIRED)
-  find_package(OpenSSL REQUIRED)
-  find_package(jsoncpp REQUIRED)
-  target_link_libraries(digiasset_core PRIVATE SQLite::SQLite3)
-  target_link_libraries(digiasset_core PRIVATE OpenSSL::Crypto)
-  target_link_libraries(digiasset_core PRIVATE jsoncpp_static)
+  find_package(SQLite3)
+  find_package(OpenSSL)
+  find_package(jsoncpp QUIET)
+  if(SQLite3_FOUND)
+    target_link_libraries(digiasset_core PRIVATE SQLite::SQLite3)
+  endif()
+  if(OpenSSL_FOUND)
+    target_link_libraries(digiasset_core PRIVATE OpenSSL::Crypto)
+  endif()
+  if(TARGET jsoncpp_static)
+    target_link_libraries(digiasset_core PRIVATE jsoncpp_static)
+  elseif(TARGET jsoncpp_lib)
+    target_link_libraries(digiasset_core PRIVATE jsoncpp_lib)
+  elseif(TARGET jsoncpp)
+    target_link_libraries(digiasset_core PRIVATE jsoncpp)
+  endif()
 else()
   target_link_libraries(digiasset_core PUBLIC sqlite3)
   target_link_libraries(digiasset_core PRIVATE ssl)
@@ -166,8 +199,12 @@ else()
   target_link_libraries(digiasset_core PRIVATE /lib/x86_64-linux-gnu/libjsoncpp.so)
 endif()
 
-target_link_libraries(digiasset_core PRIVATE jsonrpccpp-common)
-target_link_libraries(digiasset_core PRIVATE jsonrpccpp-client)
+if(TARGET jsonrpccpp-common)
+  target_link_libraries(digiasset_core PRIVATE jsonrpccpp-common)
+endif()
+if(TARGET jsonrpccpp-client)
+  target_link_libraries(digiasset_core PRIVATE jsonrpccpp-client)
+endif()
 
 install(TARGETS digiasset_core DESTINATION bin)
 add_library(digiasset_core_lib STATIC ${SOURCE_FILES} ${HEADER_FILES} ${RPC_METHODS_FILES})

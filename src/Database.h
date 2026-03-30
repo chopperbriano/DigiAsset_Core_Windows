@@ -277,7 +277,7 @@ public:
 
 private:
     std::vector<PerformanceIndex> _performanceIndexes;
-
+    int _transactionDepth = 0;
 
     //locks
     std::mutex _mutexGetNextIPFSJob;

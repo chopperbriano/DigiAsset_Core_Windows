@@ -176,7 +176,7 @@ namespace utils {
         char input;
         while (true) {
             cin >> input;
-            input = toupper(input); // Convert to uppercase to handle lowercase inputs
+            input = (char)toupper((unsigned char)input); // Convert to uppercase to handle lowercase inputs
 
             if (input == 'Y') {
                 return true;

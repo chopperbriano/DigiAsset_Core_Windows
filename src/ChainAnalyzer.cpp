@@ -194,6 +194,8 @@ void ChainAnalyzer::setPruneAge(int age) {
  */
 
 void ChainAnalyzer::startupFunction() {
+    Log* log = Log::GetInstance();
+
     //mark as initializing
     _state = INITIALIZING;
     AppMain* main = AppMain::GetInstance();
@@ -208,7 +210,6 @@ void ChainAnalyzer::startupFunction() {
     _nextHash = dgb->getBlockHash(_height);
 
     //clear the block we left off on just in case it was partially processed
-    Log* log = Log::GetInstance();
     log->addMessage("Repairing database from shutdown");
     db->clearBlocksAboveHeight(_height);
     log->addMessage("Repair complete");
@@ -311,11 +312,13 @@ void ChainAnalyzer::phaseSync() {
         _state = 0 - blockData.confirmations;                        //calculate how far behind we are
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") "; //+1 because message is related to after block is done
 
-        //process each tx in block
+        //process each tx in block (all writes batched in one SQLite transaction)
+        db->startTransaction();
         if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) { //only non asset utxo below this height
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
         }
+        db->endTransaction();
 
 
         //show run time stats

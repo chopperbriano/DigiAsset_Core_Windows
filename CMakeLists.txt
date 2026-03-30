@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 project(digiasset_core)
 
-option(BUILD_CLI "Build CLI" ON)
-option(BUILD_WEB "Build Web Server" ON)
+option(BUILD_CLI "Build CLI" OFF)
+option(BUILD_WEB "Build Web Server" OFF)
 option(BUILD_TEST "Build Tests" OFF)
+
+set(CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/jsoncpp/install" "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install" ${CMAKE_PREFIX_PATH})
 
 # Check if CMAKE_PREFIX_PATH is set.
 if (WIN32)

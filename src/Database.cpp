@@ -711,16 +711,21 @@ Database::~Database() {
  * time it takes to make all the transactions
  */
 void Database::startTransaction() {
-    char* zErrMsg = nullptr;
-    sqlite3_exec(_db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg);
+    if (_transactionDepth++ == 0) {
+        char* zErrMsg = nullptr;
+        sqlite3_exec(_db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg);
+    }
 }
 
 /**
  * Finishes the batch transaction
  */
 void Database::endTransaction() {
-    char* zErrMsg = nullptr;
-    sqlite3_exec(_db, "END TRANSACTION", nullptr, nullptr, &zErrMsg);
+    if (_transactionDepth <= 0) return; // guard against unmatched calls
+    if (--_transactionDepth == 0) {
+        char* zErrMsg = nullptr;
+        sqlite3_exec(_db, "END TRANSACTION", nullptr, nullptr, &zErrMsg);
+    }
 }
 
 /**

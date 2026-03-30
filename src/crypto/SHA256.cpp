@@ -145,14 +145,14 @@ void SHA256::pad() {
 
     // Append to the padding the total message's length in bits and transform.
     m_bitlen += m_blocklen * 8;
-    m_data[63] = m_bitlen;
-    m_data[62] = m_bitlen >> 8;
-    m_data[61] = m_bitlen >> 16;
-    m_data[60] = m_bitlen >> 24;
-    m_data[59] = m_bitlen >> 32;
-    m_data[58] = m_bitlen >> 40;
-    m_data[57] = m_bitlen >> 48;
-    m_data[56] = m_bitlen >> 56;
+    m_data[63] = (uint8_t)(m_bitlen & 0xFF);
+    m_data[62] = (uint8_t)((m_bitlen >> 8) & 0xFF);
+    m_data[61] = (uint8_t)((m_bitlen >> 16) & 0xFF);
+    m_data[60] = (uint8_t)((m_bitlen >> 24) & 0xFF);
+    m_data[59] = (uint8_t)((m_bitlen >> 32) & 0xFF);
+    m_data[58] = (uint8_t)((m_bitlen >> 40) & 0xFF);
+    m_data[57] = (uint8_t)((m_bitlen >> 48) & 0xFF);
+    m_data[56] = (uint8_t)((m_bitlen >> 56) & 0xFF);
     transform();
 }
 
@@ -161,7 +161,7 @@ void SHA256::revert(std::array<uint8_t, 32> & hash) {
     // Revert all bytes
     for (uint8_t i = 0 ; i < 4 ; i++) {
         for(uint8_t j = 0 ; j < 8 ; j++) {
-            hash[i + (j * 4)] = (m_state[j] >> (24 - i * 8)) & 0x000000ff;
+            hash[i + (j * 4)] = (uint8_t)((m_state[j] >> (24 - i * 8)) & 0x000000ff);
         }
     }
 }

@@ -7,6 +7,7 @@
 
 
 #include "Response.h"
+#include <array>
 #include <chrono>
 #include <jsoncpp/json/value.h>
 #include <list>

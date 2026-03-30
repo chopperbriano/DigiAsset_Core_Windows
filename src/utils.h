@@ -6,6 +6,7 @@
 #define DIGIASSET_CORE_UTILS_H
 
 #include <jsoncpp/json/value.h>
+#include <array>
 #include <limits>
 #include <string>
 #include <vector>

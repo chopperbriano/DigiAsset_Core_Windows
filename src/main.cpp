@@ -9,6 +9,7 @@
 #include "Version.h"
 #include "utils.h"
 #include <iostream>
+#include <memory>
 
 
 int main() {
@@ -101,7 +102,7 @@ int main() {
     /*
      * Start Log
      */
-    Log* log = Log::GetInstance("debug.log");
+    Log* log = Log::GetInstance();
     Config config = Config("config.cfg");
     log->setMinLevelToScreen(static_cast<Log::LogLevel>(config.getInteger("logscreen", static_cast<int>(Log::INFO))));
     log->setMinLevelToFile(static_cast<Log::LogLevel>(config.getInteger("logfile", static_cast<int>(Log::WARNING))));
@@ -214,29 +215,33 @@ int main() {
     log->addMessage("Starting Chain Analyzer");
     ChainAnalyzer analyzer;
     analyzer.loadConfig();
-    analyzer.start();
     main->setChainAnalyzer(&analyzer);
 
-    //analyzer.stop();
-
     /**
-     * Start RPC Server
+     * Start RPC Server in its own thread so it doesn't block the main thread
      */
-
     try {
-        // Create and start the Bitcoin RPC server
         log->addMessage("Starting RPC Server");
-        RPC::Server server;
-        main->setRpcServer(&server);
-        server.start();
-
+        std::shared_ptr<RPC::Server> server = std::make_shared<RPC::Server>();
+        main->setRpcServer(server.get());
+        std::thread rpcThread([server] {
+            server->start();
+        });
+        rpcThread.detach();
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        log->addMessage(std::string("RPC server failed: ") + e.what(), Log::CRITICAL);
     }
 
+    /**
+     * Start Chain Analyzer
+     */
+    try {
+        analyzer.start();
+    } catch (const std::exception& e) {
+        log->addMessage(std::string("Chain Analyzer start failed: ") + e.what(), Log::CRITICAL);
+    }
 
     while (true) {
-        std::chrono::seconds dura(100);
-        std::this_thread::sleep_for(dura);
+        std::this_thread::sleep_for(std::chrono::seconds(100));
     }
 }

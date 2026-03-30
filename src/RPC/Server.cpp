@@ -16,8 +16,6 @@
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
 #include <memory>
-#include <openssl/bio.h>
-#include <openssl/evp.h>
 #include <thread>
 #include <vector>
 
@@ -54,6 +52,29 @@ namespace RPC {
                 "scantxoutset",
                 "verifychain",
                 "verifytxoutproof"};
+
+        // Simple Base64 decoder for Basic Auth when OpenSSL is unavailable
+        static std::string base64Decode(const std::string& input) {
+            static const std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string decoded;
+            int val = 0;
+            int valb = -8;
+            for (unsigned char c : input) {
+                if (isspace(c) || c == '=') {
+                    if (c == '=') break;
+                    continue;
+                }
+                size_t pos = charset.find(c);
+                if (pos == std::string::npos) break;
+                val = (val << 6) + static_cast<int>(pos);
+                valb += 6;
+                if (valb >= 0) {
+                    decoded.push_back(char((val >> valb) & 0xFF));
+                    valb -= 8;
+                }
+            }
+            return decoded;
+        }
     } // namespace
 
     /**
@@ -76,30 +97,42 @@ namespace RPC {
     ███████║███████╗   ██║   ╚██████╔╝██║
     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝
      */
-    Server::Server(const string& fileName) : _io(), _work(boost::asio::make_work_guard(_io)) {
-        Config config = Config(fileName);
-        _username = config.getString("rpcuser");
-        _password = config.getString("rpcpassword");
-        _port = config.getInteger("rpcassetport", 14024);
+    Server::Server(const string& fileName) : _io() {
+        Log* log = Log::GetInstance();
 
         // Create work to keep io_ running
         auto work = boost::asio::make_work_guard(_io);
 
         // Create a pool of threads to run all of the io_services.
-        size_t poolSize = config.getInteger("rpcparallel", 8);
+        size_t poolSize = 8; // default
         for (std::size_t i = 0; i < poolSize; ++i) {
             _thread_pool.emplace_back([this] { run_thread(); });
         }
 
-        tcp::endpoint endpoint(tcp::v4(), _port);
-        _acceptor.open(endpoint.protocol());
-        _acceptor.set_option(tcp::acceptor::reuse_address(true));
-        _acceptor.bind(endpoint);
-        _acceptor.listen();
+        _acceptor = tcp::acceptor(_io);
 
-        _allowedRPC = config.getBoolMap("rpcallow");
+        try {
+            Config config = Config(fileName);
+            _username = config.getString("rpcuser");
+            _password = config.getString("rpcpassword");
+            _port = config.getInteger("rpcassetport", 14024);
 
-        _showParamsOnError = config.getBool("rpcdebugshowparamsonerror", false);
+            tcp::endpoint endpoint(tcp::v4(), _port);
+            _acceptor.open(endpoint.protocol());
+            _acceptor.set_option(tcp::acceptor::reuse_address(true));
+            _acceptor.bind(endpoint);
+            _acceptor.listen();
+
+            _allowedRPC = config.getBoolMap("rpcallow");
+            _showParamsOnError = config.getBool("rpcdebugshowparamsonerror", false);
+            log->addMessage("RPC Server listening on port " + std::to_string(_port));
+        } catch (const std::exception& e) {
+            log->addMessage(std::string("RPC::Server ctor exception: ") + e.what(), Log::CRITICAL);
+            throw;
+        } catch (...) {
+            log->addMessage("RPC::Server ctor unknown exception", Log::CRITICAL);
+            throw;
+        }
     }
 
     Server::~Server() {
@@ -116,7 +149,14 @@ namespace RPC {
     }
 
     void Server::start() {
-        accept();
+        Log* log = Log::GetInstance();
+        try {
+            accept();
+        } catch (const std::exception& e) {
+            log->addMessage(std::string("RPC server stopped: ") + e.what(), Log::CRITICAL);
+        } catch (...) {
+            log->addMessage("RPC server stopped with unknown error", Log::CRITICAL);
+        }
     }
 
     /*
@@ -131,17 +171,16 @@ namespace RPC {
     void Server::accept() {
         Log* log = Log::GetInstance();
         while (true) {
-            uint64_t callNumber = _callCounter++; // Get a unique identifier for this call
+            uint64_t callNumber = _callCounter++;
             try {
                 auto socket = std::make_shared<tcp::socket>(_io);
                 _acceptor.accept(*socket);
-
-                log->addMessage("RPC call #" + std::to_string(callNumber) + " added to que", Log::DEBUG);
+                log->addMessage("RPC call #" + std::to_string(callNumber) + " received", Log::DEBUG);
                 boost::asio::post(_io, [this, socket, callNumber]() { this->handleConnection(socket, callNumber); });
             } catch (const std::exception& e) {
-                log->addMessage("Unexpected exception in RPC call #" + std::to_string(callNumber) + ": " + e.what(), Log::DEBUG);
+                log->addMessage("RPC accept error: " + std::string(e.what()), Log::DEBUG);
             } catch (...) {
-                log->addMessage("Unknown exception in RPC call #" + std::to_string(callNumber), Log::DEBUG);
+                log->addMessage("RPC accept unknown error", Log::DEBUG);
             }
         }
     }
@@ -262,20 +301,9 @@ namespace RPC {
     bool Server::basicAuth(const string& headers) {
         string authHeader = getHeader(headers, "Authorization");
 
-        string decoded;
         // Extract and decode the base64-encoded credentials
         string base64Credentials = authHeader.substr(6); // Remove "Basic "
-        BIO* bio = BIO_new(BIO_f_base64());
-        BIO* bioMem = BIO_new_mem_buf(base64Credentials.c_str(), -1);
-        bio = BIO_push(bio, bioMem);
-        BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
-
-        char buffer[1024];
-        int len;
-        while ((len = BIO_read(bio, buffer, sizeof(buffer))) > 0) {
-            decoded.append(buffer, len);
-        }
-        BIO_free_all(bio);
+        string decoded = base64Decode(base64Credentials);
 
         return (decoded == _username + ":" + _password);
     }

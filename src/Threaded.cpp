@@ -3,6 +3,7 @@
 //
 
 #include "Threaded.h"
+#include "Log.h"
 #include <future>
 
 using namespace std;
@@ -12,13 +13,31 @@ using namespace std;
  */
 void Threaded::_threadFunction() {
     //startup thread
-    startupFunction();
+    try {
+        startupFunction();
+    } catch (const std::exception& e) {
+        Log::GetInstance()->addMessage(std::string("Threaded startupFunction exception: ") + e.what(), Log::CRITICAL);
+        _running = false;
+        return;
+    } catch (...) {
+        Log::GetInstance()->addMessage("Threaded startupFunction unknown exception", Log::CRITICAL);
+        _running = false;
+        return;
+    }
 
     //main function
     vector<future<void>> subThreads;
     while (!_stopRequest) {
         //run sub thread task
-        subThreads.push_back(async(launch::async, &Threaded::mainFunction, this));
+        subThreads.push_back(async(launch::async, [this] {
+            try {
+                mainFunction();
+            } catch (const std::exception& e) {
+                Log::GetInstance()->addMessage(std::string("Threaded mainFunction exception: ") + e.what(), Log::CRITICAL);
+            } catch (...) {
+                Log::GetInstance()->addMessage("Threaded mainFunction unknown exception", Log::CRITICAL);
+            }
+        }));
 
         //wait for a sub thread to be finished if full
         while (subThreads.size() >= _parallels) {
