@@ -1,0 +1,142 @@
+# Changelog — Windows Port (MSVC/WinHTTP/SQLite3)
+
+## Overview
+
+This work ports DigiAsset Core from Linux/GCC to Windows (MSVC 2022, x64).
+The original codebase assumed Linux system libraries (libcurl, OpenSSL,
+libjsonrpccpp, SQLite3). The Windows port replaces each dependency with either
+a Windows-native implementation or a locally-vendored source copy, so the
+project builds and runs without any external `vcpkg` or system packages beyond
+a standard Visual Studio 2022 installation plus the Boost NuGet package.
+
+---
+
+## New Files
+
+### `src/curl/curl.h`
+Minimal libcurl API header declaring only the types, enums, and function
+signatures actually used by DigiAsset Core. Allows the codebase to `#include
+<curl/curl.h>` without installing libcurl.
+
+### `src/curl_stubs.cpp`
+Full WinHTTP-backed implementation of the libcurl API subset:
+
+- **Persistent connections** — `CurlHandle` stores `HINTERNET hSession` and
+  `HINTERNET hConnect` and reuses them across `curl_easy_perform()` calls on
+  the same `CURL*` handle. Eliminates a TCP+HTTP handshake on every RPC call to
+  DigiByte Core, reducing per-call overhead significantly.
+- **Reconnect-on-stale** — if a keep-alive connection goes stale the request
+  is retried once with a fresh connection handle before returning an error.
+- **Auth header injection** — user:password credentials embedded in the URL
+  are Base64-encoded and sent as an `Authorization: Basic` header.
+- **Correct error mapping** — `ERROR_WINHTTP_CANNOT_CONNECT` and
+  `ERROR_WINHTTP_CONNECTION_ERROR` map to `CURLE_COULDNT_CONNECT`, whose
+  `curl_easy_strerror()` string (`"Could not connect to server"`) matches the
+  substring checked by `IPFS::_command()` so that a non-running local IPFS
+  daemon is silently ignored rather than logged as CRITICAL errors.
+
+### `src/openssl/bio.h` and `src/openssl/evp.h`
+Stub OpenSSL headers providing the minimum type definitions needed to compile
+the jsonrpccpp HTTP connector without installing OpenSSL.
+
+### `src/openssl_stubs.cpp`
+No-op implementations of the OpenSSL BIO and EVP functions referenced by
+jsonrpccpp's HTTP connector. The connector's SSL code path is not exercised
+(all connections are plain HTTP to localhost/LAN endpoints), so stubs suffice.
+
+### `src/sqlite3.h` and `src/sqlite3.c`
+Real **SQLite 3.47.2 amalgamation**. Replaces the previous stub that returned
+`SQLITE_DONE` from every statement, causing `Database::getBlockHeight()` to
+throw "Database Exception: Select failed" on startup. Compiled directly as part
+of the project — no separate library or DLL needed.
+
+### `src/jsonrpccpp/`
+Vendored source copy of the libjsonrpccpp `common`, `client`, and `server`
+modules, with a custom `src/jsonrpccpp/common/jsonparser.h` that bridges to the
+locally-installed jsoncpp headers. Eliminates the system package dependency.
+
+---
+
+## Modified Files
+
+### `CMakeLists.txt` and `src/CMakeLists.txt`
+- On MSVC: select the stub/vendored sources instead of system packages
+- Link `winhttp.lib`
+- Add Windows-specific preprocessor definitions
+- Compile `src/sqlite3.c` as a direct source unit
+
+### `src/Database.h` and `src/Database.cpp`
+
+**Transaction nesting guard** — Added `int _transactionDepth = 0` member.
+`startTransaction()` increments the counter and only issues `BEGIN TRANSACTION`
+when depth goes from 0 → 1. `endTransaction()` decrements and only issues
+`END TRANSACTION` when depth returns to 0. This prevents a nested call (e.g.
+from block-level batching inside a pre-existing transaction) from prematurely
+committing an outer transaction.
+
+**Write verification bypass** — When `verifydatabasewrite=0` is set in
+`config.cfg`, the database now executes:
+```
+PRAGMA synchronous = OFF
+PRAGMA journal_mode = MEMORY
+```
+This eliminates the `fsync()` / file-flush overhead on every SQLite write,
+which was the dominant bottleneck during initial blockchain sync. Estimated sync
+time dropped from ~4 days to approximately 26 hours.
+
+### `src/ChainAnalyzer.cpp`
+
+**Block-level transaction batching** — All database writes for a single block
+are wrapped in one `startTransaction()` / `endTransaction()` pair inside
+`phaseSync()`. For dense blocks with many transactions this reduces the number
+of SQLite `BEGIN`/`COMMIT` round-trips from O(txcount) to 1.
+
+**Cleanup** — Removed temporary debug `cerr` statements; restored
+`startupFunction()` to its original exception-propagation pattern.
+
+### `src/RPC/Server.h` and `src/RPC/Server.cpp`
+
+Removed the `ctorInitTrace()` static-initializer scaffolding that was added
+during early debugging (it served no runtime purpose). Removed all temporary
+`std::cerr << "DEBUG:"` statements. The constructor now logs a single
+`"RPC Server listening on port N"` message through the normal `Log` subsystem.
+
+### `src/main.cpp`
+
+- Log level for file output restored to config-driven value
+  (`config.getInteger("logfile", Log::WARNING)`)
+- RPC server launched in a detached thread that calls `server->start()`
+  (previously had a no-op lambda during debugging)
+- Chain Analyzer start wrapped in try/catch that logs via `Log::CRITICAL`
+- All temporary debug output removed
+
+### `src/CurlHandler.cpp`, `src/Threaded.cpp`, `src/crypto/SHA256.cpp`, `src/utils.cpp`, `src/utils.h`, `src/RPC/Cache.h`
+
+Miscellaneous Windows/MSVC compatibility fixes:
+- Missing `#include` directives for standard headers
+- `int`/`size_t` signed-unsigned comparison warnings treated as errors under MSVC
+- Platform-specific preprocessor guards (`#ifdef _WIN32`)
+- `constexpr` and `inline` specifier adjustments for MSVC conformance
+
+---
+
+## Configuration
+
+Add the following line to `config.cfg` to enable the write-performance mode
+(recommended during initial sync; safe to leave on for normal operation if you
+do not need crash-safe durability):
+
+```
+verifydatabasewrite=0
+```
+
+---
+
+## Build Requirements (Windows)
+
+- Visual Studio 2022 (Community or higher), C++ desktop workload
+- CMake 3.20+
+- Boost (installed via the project's NuGet restore, or manually to `src/boost/`)
+- jsoncpp (header-only path expected at `src/jsoncpp/` or system include)
+- No other external libraries required — curl, OpenSSL, SQLite3, and
+  jsonrpccpp are all provided by vendored sources in this repository
