@@ -177,6 +177,21 @@ CURL* curl_easy_init(void) {
     return reinterpret_cast<CURL*>(new CurlHandle());
 }
 
+void curl_easy_reset(CURL* handle) {
+    CurlHandle* h = reinterpret_cast<CurlHandle*>(handle);
+    if (!h) return;
+    // Reset per-request state but preserve persistent WinHTTP session/connection
+    h->url.clear();
+    h->postFields.clear();
+    h->headers       = nullptr;
+    h->writeFunc     = nullptr;
+    h->writeData     = nullptr;
+    h->timeoutMs     = 30000;
+    h->isPost        = false;
+    h->responseCode  = 0;
+    // hSession, hConnect, connHost, connPort, connHttps are preserved
+}
+
 CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
     CurlHandle* h = reinterpret_cast<CurlHandle*>(handle);
     if (!h) return CURLE_BAD_FUNCTION_ARGUMENT;

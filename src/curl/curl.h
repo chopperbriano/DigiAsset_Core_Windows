@@ -183,6 +183,7 @@ typedef enum {
 } CURLINFO;
 
 CURL *curl_easy_init(void);
+void curl_easy_reset(CURL *handle);
 CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...);
 CURLcode curl_easy_perform(CURL *easy_handle);
 void curl_easy_cleanup(CURL *handle);

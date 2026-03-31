@@ -104,6 +104,7 @@ set(HEADER_FILES
         PermanentStoragePool/pools/local.h
         AppMain.h
         CurlHandler.h
+        ConsoleDashboard.h
         Version.h
         OldStream.h
         UniqueTaskQueue.h
@@ -145,6 +146,7 @@ set(SOURCE_FILES
         PermanentStoragePool/pools/local.cpp
         AppMain.cpp
         CurlHandler.cpp
+        ConsoleDashboard.cpp
         OldStream.cpp
         UniqueTaskQueue.cpp
         Database_Statement.cpp

@@ -1,6 +1,7 @@
 #include "AppMain.h"
 #include "ChainAnalyzer.h"
 #include "Config.h"
+#include "ConsoleDashboard.h"
 #include "Database.h"
 #include "DigiByteCore.h"
 #include "IPFS.h"
@@ -100,12 +101,19 @@ int main() {
     }
 
     /*
-     * Start Log
+     * Start Log and Console Dashboard
      */
     Log* log = Log::GetInstance();
     Config config = Config("config.cfg");
     log->setMinLevelToScreen(static_cast<Log::LogLevel>(config.getInteger("logscreen", static_cast<int>(Log::INFO))));
     log->setMinLevelToFile(static_cast<Log::LogLevel>(config.getInteger("logfile", static_cast<int>(Log::WARNING))));
+
+    // Set up the in-place console dashboard (config wizard is done, safe to take over screen)
+    ConsoleDashboard dashboard;
+    if (ConsoleDashboard::enableVT100()) {
+        log->setDashboard(&dashboard);
+        dashboard.start();
+    }
 
     /*
      * Print starting message

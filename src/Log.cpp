@@ -3,6 +3,7 @@
 //
 
 #include "Log.h"
+#include "ConsoleDashboard.h"
 
 std::mutex Log::_mutex;
 Log* Log::_pinstance = nullptr;
@@ -39,6 +40,10 @@ void Log::setMinLevelToFile(LogLevel level) {
     _minLevelToFile = level;
 }
 
+void Log::setDashboard(ConsoleDashboard* dashboard) {
+    _dashboard = dashboard;
+}
+
 void Log::addMessage(const string& message, LogLevel level) {
     lock_guard<mutex> lock(_mutex);
 
@@ -64,7 +69,11 @@ void Log::addMessage(const string& message, LogLevel level) {
     string logMessage = logLevelStr + ": " + message;
 
     if (level >= _minLevelToScreen) {
-        cout << logMessage << endl;
+        if (_dashboard) {
+            _dashboard->addMessage(logMessage);
+        } else {
+            cout << logMessage << endl;
+        }
     }
 
     if (level >= _minLevelToFile && _logFile.is_open()) {

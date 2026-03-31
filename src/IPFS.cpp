@@ -86,8 +86,8 @@ void IPFS::mainFunction() {
     IPFSCallbackFunction callback;
     db->getNextIPFSJob(jobIndex, cid, sync, extra, maxSleep, callback);
     if (jobIndex == 0) {
-        //no waiting jobs so do nothing for a tenth of a second
-        chrono::milliseconds dura(500);
+        //no waiting jobs so pause briefly before checking again
+        chrono::milliseconds dura(100);
         this_thread::sleep_for(dura);
         return;
     }

@@ -18,6 +18,8 @@ using namespace std;
 #undef ERROR
 #endif
 
+class ConsoleDashboard; // forward declaration
+
 class Log {
 public:
     enum LogLevel {
@@ -52,11 +54,13 @@ private:
     ofstream _logFile;
     LogLevel _minLevelToScreen = INFO;
     LogLevel _minLevelToFile = INFO;
+    ConsoleDashboard* _dashboard = nullptr;
 
 public:
     void setLogFile(const string& filename);
     void setMinLevelToScreen(LogLevel level);
     void setMinLevelToFile(LogLevel level);
+    void setDashboard(ConsoleDashboard* dashboard);
     void addMessage(const string& message, LogLevel level = INFO);
 
 

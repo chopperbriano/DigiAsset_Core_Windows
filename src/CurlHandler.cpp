@@ -17,6 +17,19 @@ static_block {
 
 namespace CurlHandler {
     namespace {
+        // Thread-local CURL handle - reused across calls to preserve
+        // WinHTTP session and connection handles (avoids TCP handshake per request)
+        thread_local CURL* tl_curl = nullptr;
+
+        CURL* acquireHandle() {
+            if (!tl_curl) {
+                tl_curl = curl_easy_init();
+            } else {
+                curl_easy_reset(tl_curl);
+            }
+            return tl_curl;
+        }
+
         /**
          * Private callback function for curl to build a string with returned data
          */
@@ -41,13 +54,11 @@ namespace CurlHandler {
     } // namespace
 
     string get(const string& url, unsigned int timeout) {
-        //check CURL is installed and get a thread safe instance of it
-        CURL* curl = curl_easy_init();
+        CURL* curl = acquireHandle();
         if (!curl) {
             throw runtime_error("Failed to initialize CURL");
         }
 
-        //make get request
         string readBuffer;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
@@ -56,10 +67,8 @@ namespace CurlHandler {
         CURLcode res = curl_easy_perform(curl);
         if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
         if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
         }
-        curl_easy_cleanup(curl);
         return readBuffer;
     }
 
@@ -73,13 +82,11 @@ namespace CurlHandler {
             postData += entry.first + "=" + entry.second;
         }
 
-        //check CURL is installed and get a thread safe instance of it
-        CURL* curl = curl_easy_init();
+        CURL* curl = acquireHandle();
         if (!curl) {
             throw runtime_error("Failed to initialize CURL");
         }
 
-        //make post request
         string readBuffer;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
@@ -90,32 +97,26 @@ namespace CurlHandler {
         CURLcode res = curl_easy_perform(curl);
         if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
         if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
         }
-        curl_easy_cleanup(curl);
         return readBuffer;
     }
 
     void getDownload(const string& url, const string& fileName, unsigned int timeout) {
-        //check CURL is installed and get a thread safe instance of it
-        CURL* curl = curl_easy_init();
+        CURL* curl = acquireHandle();
         if (!curl) {
             throw runtime_error("Failed to initialize CURL");
         }
 
-        //make get request
         FILE* fp;
 #ifdef _WIN32
         errno_t err = fopen_s(&fp, fileName.c_str(), "wb");
         if (err != 0 || fp == NULL) {
-            curl_easy_cleanup(curl);
             throw runtime_error("Failed to open file for writing: " + fileName);
         }
 #else
         fp = fopen(fileName.c_str(), "wb");
         if (fp == NULL) {
-            curl_easy_cleanup(curl);
             throw runtime_error("Failed to open file for writing: " + fileName);
         }
 #endif
@@ -124,13 +125,11 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
         CURLcode res = curl_easy_perform(curl);
+        fclose(fp);
         if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
         if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
         }
-        curl_easy_cleanup(curl);
-        fclose(fp);
     }
 
     void postDownload(const string& url, const string& fileName, const map<string, string>& data, unsigned int timeout) {
@@ -143,24 +142,20 @@ namespace CurlHandler {
             postData += entry.first + "=" + entry.second;
         }
 
-        //check CURL is installed and get a thread safe instance of it
-        CURL* curl = curl_easy_init();
+        CURL* curl = acquireHandle();
         if (!curl) {
             throw runtime_error("Failed to initialize CURL");
         }
 
-        //make post request
         FILE* fp;
 #ifdef _WIN32
         errno_t err = fopen_s(&fp, fileName.c_str(), "wb");
         if (err != 0 || fp == NULL) {
-            curl_easy_cleanup(curl);
             throw runtime_error("Failed to open file for writing: " + fileName);
         }
 #else
         fp = fopen(fileName.c_str(), "wb");
         if (fp == NULL) {
-            curl_easy_cleanup(curl);
             throw runtime_error("Failed to open file for writing: " + fileName);
         }
 #endif
@@ -171,13 +166,11 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
         CURLcode res = curl_easy_perform(curl);
+        fclose(fp);
         if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
         if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
         }
-        curl_easy_cleanup(curl);
-        fclose(fp);
     }
 
 

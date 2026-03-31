@@ -734,8 +734,9 @@ void Database::endTransaction() {
  */
 void Database::disableWriteVerification() {
     char* zErrMsg = nullptr;
-    sqlite3_exec(_db, "PRAGMA synchronous = OFF", nullptr, nullptr, &zErrMsg);
-    sqlite3_exec(_db, "PRAGMA journal_mode = MEMORY", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA synchronous = NORMAL", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA journal_mode = WAL", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA wal_autocheckpoint = 1000", nullptr, nullptr, &zErrMsg);
 }
 
 /*

@@ -100,15 +100,6 @@ namespace RPC {
     Server::Server(const string& fileName) : _io() {
         Log* log = Log::GetInstance();
 
-        // Create work to keep io_ running
-        auto work = boost::asio::make_work_guard(_io);
-
-        // Create a pool of threads to run all of the io_services.
-        size_t poolSize = 8; // default
-        for (std::size_t i = 0; i < poolSize; ++i) {
-            _thread_pool.emplace_back([this] { run_thread(); });
-        }
-
         _acceptor = tcp::acceptor(_io);
 
         try {
@@ -116,6 +107,15 @@ namespace RPC {
             _username = config.getString("rpcuser");
             _password = config.getString("rpcpassword");
             _port = config.getInteger("rpcassetport", 14024);
+
+            // Create work to keep io_ running
+            auto work = boost::asio::make_work_guard(_io);
+
+            // Create a pool of threads to run all of the io_services.
+            size_t poolSize = config.getInteger("rpcthreads", 16);
+            for (std::size_t i = 0; i < poolSize; ++i) {
+                _thread_pool.emplace_back([this] { run_thread(); });
+            }
 
             tcp::endpoint endpoint(tcp::v4(), _port);
             _acceptor.open(endpoint.protocol());
