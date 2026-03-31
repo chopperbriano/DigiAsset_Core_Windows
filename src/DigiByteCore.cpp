@@ -308,7 +308,6 @@ getrawtransaction_t DigiByteCore::fetchRawTxWith(PrefetchWorker& w, const string
 }
 
 void DigiByteCore::dispatchLoop() {
-    // Ensure all worker connections
     for (size_t i = 0; i < NUM_PREFETCH_WORKERS; i++) {
         ensureWorkerConnection(_workers[i]);
     }
@@ -317,7 +316,7 @@ void DigiByteCore::dispatchLoop() {
 
     while (!_prefetchStop) {
         try {
-            // Fetch NUM_PREFETCH_WORKERS blocks in parallel using getblockhash + getblock
+            // Launch all workers in parallel using std::async
             std::vector<std::future<PrefetchedBlock>> futures;
             for (size_t i = 0; i < NUM_PREFETCH_WORKERS && !_prefetchStop; i++) {
                 unsigned int h = height + (unsigned int)i;
@@ -325,18 +324,13 @@ void DigiByteCore::dispatchLoop() {
                 if (!w.connected) continue;
 
                 futures.push_back(std::async(std::launch::async, [this, &w, h]() -> PrefetchedBlock {
-                    // Get block hash by height, then get block
                     Value hashParams;
                     hashParams.append(h);
                     Value hashResult = w.client->CallMethod("getblockhash", hashParams);
-                    std::string bHash = hashResult.asString();
-
-                    blockinfo_t block = fetchBlockWith(w, bHash);
+                    blockinfo_t block = fetchBlockWith(w, hashResult.asString());
 
                     PrefetchedBlock pb;
                     pb.block = block;
-
-                    // Fetch TX data for asset-era blocks
                     if (h >= 8432316) {
                         for (const auto& txid : block.tx) {
                             try {
@@ -348,24 +342,12 @@ void DigiByteCore::dispatchLoop() {
                 }));
             }
 
-            // Collect results in order and push to queue
+            // Collect in order and push to queue
             for (auto& f : futures) {
                 if (_prefetchStop) break;
                 try {
                     PrefetchedBlock pb = f.get();
-                    if (pb.block.nextblockhash.empty()) {
-                        // At chain tip — push what we have and wait
-                        {
-                            std::unique_lock<std::mutex> lock(_prefetchMutex);
-                            _prefetchCV.wait(lock, [this] {
-                                return _prefetchQueue.size() < PREFETCH_BUFFER_SIZE || _prefetchStop;
-                            });
-                            if (!_prefetchStop) _prefetchQueue.push_back(std::move(pb));
-                        }
-                        _prefetchCV.notify_one();
-                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                        return; // exit, sync loop will restart prefetch when needed
-                    }
+                    if (pb.block.hash.empty()) continue;
 
                     std::unique_lock<std::mutex> lock(_prefetchMutex);
                     _prefetchCV.wait(lock, [this] {
@@ -375,13 +357,10 @@ void DigiByteCore::dispatchLoop() {
                     _prefetchQueue.push_back(std::move(pb));
                     lock.unlock();
                     _prefetchCV.notify_one();
-                } catch (...) {
-                    // One block failed — skip it, consumer will fall back to direct RPC
-                }
+                } catch (...) {}
             }
 
             height += NUM_PREFETCH_WORKERS;
-
         } catch (...) {
             if (_prefetchStop) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -389,10 +368,9 @@ void DigiByteCore::dispatchLoop() {
     }
 }
 
-void DigiByteCore::startPrefetch(const string& startHash, unsigned int startHeight) {
+void DigiByteCore::startPrefetch(unsigned int startHeight) {
     stopPrefetch();
     _prefetchStop = false;
-    _prefetchNextHash = startHash;
     _prefetchHeight = startHeight;
     _dispatchThread = std::thread(&DigiByteCore::dispatchLoop, this);
 }

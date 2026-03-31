@@ -308,7 +308,7 @@ void ChainAnalyzer::phaseSync() {
 
         //start prefetch pipeline during bulk sync (skips TX fetch for pre-asset blocks)
         if (bulkSync && !pipelineActive && !blockData.nextblockhash.empty()) {
-            dgb->startPrefetch(blockData.nextblockhash, _height + 1);
+            dgb->startPrefetch(_height + 1);
             pipelineActive = true;
         } else if (!bulkSync && pipelineActive) {
             dgb->stopPrefetch();
