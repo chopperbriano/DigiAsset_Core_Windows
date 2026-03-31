@@ -219,41 +219,41 @@ void ConsoleDashboard::render() {
     // ---- Build output -------------------------------------------------------
     std::ostringstream out;
     int w = _width;
+    int totalRows = 0; // track exactly how many rows we emit
 
     // Hide cursor + home
     out << HIDE_CURSOR << CURSOR_HOME;
 
     // Row 1-2: Header
-    std::string title = getProductVersionString() + "  (based on upstream " + getUpstreamVersionString() + ")";
-    out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE << centerText(title, w) << RESET << "\n";
-    out << ERASE_LINE << std::string(w, '-') << "\n";
+    std::string title = getProductVersionString() + "  (upstream " + getUpstreamVersionString() + ")";
+    out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE << centerText(title, w) << RESET << "\n"; totalRows++;
+    out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
 
-    // Row 3-4: Connection Status
-    out << BOLD << ERASE_LINE << " Services:" << RESET << "\n";
-
-    out << ERASE_LINE;
-    out << "  DigiByte Core: " << (dgbOnline ? (std::string(FG_GREEN) + "Online") : (std::string(FG_RED) + "Offline")) << RESET;
-    out << "    Database: " << (dbOnline ? (std::string(FG_GREEN) + "Ready") : (std::string(FG_RED) + "N/A")) << RESET;
-    out << "    IPFS: " << (ipfsOnline ? (std::string(FG_GREEN) + "Connected") : (std::string(FG_YELLOW) + "N/A")) << RESET;
-    out << "    RPC: " << (rpcOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(rpcPort)) : (std::string(FG_RED) + "Off")) << RESET;
-    // Pad to full width
-    out << "\n";
+    // Row 3-4: Services (two lines to avoid wrapping)
+    out << ERASE_LINE
+        << "  DigiByte Core: " << (dgbOnline ? (std::string(FG_GREEN) + "Online") : (std::string(FG_RED) + "Offline")) << RESET
+        << "    Database: " << (dbOnline ? (std::string(FG_GREEN) + "Ready") : (std::string(FG_RED) + "N/A")) << RESET
+        << "\n"; totalRows++;
+    out << ERASE_LINE
+        << "  IPFS: " << (ipfsOnline ? (std::string(FG_GREEN) + "Connected") : (std::string(FG_YELLOW) + "N/A")) << RESET
+        << "           RPC: " << (rpcOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(rpcPort)) : (std::string(FG_RED) + "Off")) << RESET
+        << "\n"; totalRows++;
 
     // Row 5: separator
-    out << ERASE_LINE << std::string(w, '-') << "\n";
+    out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
 
-    // Row 6-10: Sync Progress
-    out << BOLD << ERASE_LINE << " Sync Status: " << syncColor << syncStatusText << RESET << "\n";
+    // Row 6: Sync Status
+    out << BOLD << ERASE_LINE << " Sync: " << syncColor << syncStatusText << RESET << "\n"; totalRows++;
 
-    // Height line
-    out << ERASE_LINE << "  Block Height:  " << FG_BRIGHT_WHITE << formatNumber(syncHeight) << RESET;
+    // Row 7: Height
+    out << ERASE_LINE << "  Block:   " << FG_BRIGHT_WHITE << formatNumber(syncHeight) << RESET;
     if (chainTip > 0) {
         out << " / " << formatNumber(chainTip);
     }
-    out << "\n";
+    out << "\n"; totalRows++;
 
-    // Speed & ETA
-    out << ERASE_LINE << "  Speed:         ";
+    // Row 8: Speed & ETA
+    out << ERASE_LINE << "  Speed:   ";
     if (_blocksPerSec >= 0.01) {
         out << FG_BRIGHT_WHITE;
         if (_blocksPerSec >= 1.0) {
@@ -264,35 +264,34 @@ void ConsoleDashboard::render() {
         }
         out << RESET;
     } else {
-        out << DIM << "-- " << RESET;
+        out << DIM << "--" << RESET;
     }
-    out << "    ETA: " << FG_BRIGHT_WHITE << etaText << RESET << "\n";
+    out << "    ETA: " << FG_BRIGHT_WHITE << etaText << RESET << "\n"; totalRows++;
 
-    // Progress bar
-    int barWidth = w - 20;
-    if (barWidth < 10) barWidth = 10;
-    out << ERASE_LINE << "  Progress:  " << progressBar(progress, barWidth);
-    out << " " << std::fixed << std::setprecision(1) << (progress * 100.0) << "%\n";
-
-    // Asset count
-    out << ERASE_LINE << "  Assets:        " << FG_BRIGHT_WHITE;
+    // Row 9: Assets
+    out << ERASE_LINE << "  Assets:  " << FG_BRIGHT_WHITE;
     if (_assetCount > 0) {
-        out << formatNumber(_assetCount) << " unique assets on chain";
+        out << formatNumber(_assetCount);
     } else {
         out << DIM << "--";
     }
-    out << RESET << "\n";
+    out << RESET << "\n"; totalRows++;
 
-    // Row separator
-    out << ERASE_LINE << std::string(w, '-') << "\n";
+    // Row 10: Progress bar
+    int barWidth = w - 18;
+    if (barWidth < 10) barWidth = 10;
+    out << ERASE_LINE << "  " << progressBar(progress, barWidth);
+    out << " " << std::fixed << std::setprecision(1) << (progress * 100.0) << "%\n"; totalRows++;
 
-    // Row 12+: Recent Log Messages
-    out << BOLD << ERASE_LINE << " Recent Messages:" << RESET << "\n";
+    // Row 11: separator
+    out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
 
-    // How many log rows can we show?
-    int headerRows = 12; // rows used above
-    int logRows = _height - headerRows - 1; // -1 for bottom padding
-    if (logRows < 3) logRows = 3;
+    // Row 12: Messages header
+    out << BOLD << ERASE_LINE << " Log:" << RESET << "\n"; totalRows++;
+
+    // Remaining rows: log messages — must not exceed window height
+    int logRows = _height - totalRows - 1; // -1 to avoid scrolling on last row
+    if (logRows < 1) logRows = 1;
 
     {
         std::lock_guard<std::mutex> lock(_msgMutex);
@@ -325,9 +324,10 @@ void ConsoleDashboard::render() {
             }
             out << RESET << "\n";
         }
-        // Fill remaining rows with blank lines to prevent leftover text
+        // Fill remaining rows with blank lines (no \n on the very last row)
         for (int i = printed; i < logRows; ++i) {
-            out << ERASE_LINE << "\n";
+            out << ERASE_LINE;
+            if (i < logRows - 1) out << "\n";
         }
     }
 
