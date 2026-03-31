@@ -120,6 +120,31 @@ Miscellaneous Windows/MSVC compatibility fixes:
 
 ---
 
+## CLI, Web, and Test Targets
+
+### `cli/CMakeLists.txt`
+Rewrote for Windows: uses WinHTTP curl stubs and local jsonrpccpp sources
+on MSVC instead of `find_package(CURL)`. Builds `digiasset_core-cli.exe`.
+
+### `web/CMakeLists.txt`
+Added Boost 1.82.0 NuGet include path so Boost Beast headers are found.
+Added `_WIN32_WINNT` definition. Builds `digiasset_core-web.exe`.
+
+### `tests/CMakeLists.txt`
+- Uses C++20 on MSVC (required for designated initializers in test code)
+- Added `/Zc:char8_t-` flag to preserve `u8""` as `const char[]`
+- Links Windows-specific libraries (winhttp, jsoncpp_static, jsonrpccpp)
+
+### `tests/Base58Tests.cpp`
+Changed `std::uniform_int_distribution<uint8_t>` to `unsigned int` —
+MSVC's STL does not allow `uint8_t` as a distribution type.
+
+### `src/DigiAssetRules.h` and `src/DigiAssetRules.cpp`
+Made `operator==` `const` to fix C++20 ambiguity with gtest's
+`EXPECT_TRUE` macro (C++20 synthesizes reverse `operator==` candidates).
+
+---
+
 ## Configuration
 
 Add the following line to `config.cfg` to enable the write-performance mode

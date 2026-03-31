@@ -1,8 +1,9 @@
 ## Table of Contents
 1. [Build on Windows](#build-on-windows)
-2. [Install DigiByte](#install-digibyte)
-3. [Documentation](#Documentation)
-4. [Other Notes](#other-notes)
+2. [Optional Build Targets](#optional-build-targets)
+3. [Install DigiByte](#install-digibyte)
+4. [Documentation](#Documentation)
+5. [Other Notes](#other-notes)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -10,82 +11,78 @@
 
 This fork builds a Windows version with Visual Studio and MSVC in the main branch, with upstream tracking in the 'upstream-master' branch.
 
+Most dependencies (libcurl, OpenSSL, SQLite3, libjsonrpccpp) are replaced by vendored source files or Windows-native stubs (WinHTTP), so no vcpkg or external package manager is needed beyond the jsoncpp and libjson-rpc-cpp subprojects that are already in the repo.
+
 Note: If you want to skip the build you can download the DigiAsset for Windows self extracting exe, and extract to c:\digiasset_core_windows or whatever path you chose.
 You will still need to install the IPFS Desktop and DigiByte Core wallet with the changes from below. You can run DigiAsset_Core.exe from a cmd prompt, as well as DigiAsset_core-web.exe from another cmd prompt.
 
 ### Prerequisites
 
-This project uses CMake for the build system. Since we're focusing on Visual Studio:
-
-1. Install CMake support through the Visual Studio Installer (select "Desktop development with C++" and ensure "C++ CMake tools for Windows" is checked)
-2. Once installed, open a command prompt with "Tools > Command Line > Developer Command Prompt"
-3. You can run `cmake` commands from within this Developer Command Prompt
+- **Visual Studio 2022** (Community or higher) with the "Desktop development with C++" workload
+- **CMake 3.20+** (included with VS — select "C++ CMake tools for Windows" in the installer)
 
 ### Clone the Repository
 
-If you just want to build binaries, use the Clone a repository option and use the following path.
-
 ```cmd
-https://github.com/chopperbrian/DigiAsset_Core_Windows.git
+git clone https://github.com/chopperbriano/DigiAsset_Core_Windows.git
+cd DigiAsset_Core_Windows
 ```
 
-### Set Up VCPKG
-
-Run the following command in cmd.exe:
-
-```cmd
-cd vcpkg
-.\bootstrap-vcpkg.bat
-```
-
-### Choose Build Configuration
-
-Before proceeding with the library builds, you must decide whether you want to create a "Debug" or a "Release" build.
-
-*   **Debug:** Includes debugging information, useful for development and troubleshooting. Binaries are typically larger and may run slower.
-*   **Release:** Optimized for performance and size, suitable for deployment.
-
-**Crucially, you must select *one* configuration (either "Debug" or "Release") in Visual Studio for the first library (JsonCpp) and use that *exact same* configuration for all subsequent library builds (LibJson-RPC and DigiAsset Core). Mixing configurations will lead to build failures.**
-
-### Install Dependencies
-
-At the top-level directory, execute. Note: This will take some time. Depending on the hardware this could take over 2 hours to finish.
-
-```cmd
-.\install-dependencies.bat
-```
-
-### Build The Binaries 
-
-#### Build JsonCpp Library
-
-Execute:
+### Build JsonCpp Library
 
 ```cmd
 .\config-jsoncpp.bat
 ```
 
-Now open the jsoncpp.sln file inside the `jsoncpp\build` directory with Visual Studio. Select your chosen build configuration ("Debug" or "Release") from the dropdown in the toolbar. From "Solution Explorer", right click on `ALL_BUILD` and select "Build". Do the same thing for `INSTALL` in order to install the library.
+Open `jsoncpp\build\jsoncpp.sln` in Visual Studio. Select your build configuration (Debug or Release). Build `ALL_BUILD`, then build `INSTALL`.
 
-#### Build LibJson-RPC Library
-
-Execute:
+### Build LibJson-RPC Library
 
 ```cmd
 .\config-libjson-rpc.bat
 ```
 
-Like with JsonCpp, open the libjson-rpc-cpp.sln file inside the `libjson-rpc-cpp\build` directory. Ensure the **same** build configuration ("Debug" or "Release") you chose previously is selected. Build the `ALL_BUILD` and `INSTALL` options in "Solution Explorer".
+Open `libjson-rpc-cpp\build\libjson-rpc-cpp.sln`. Use the **same** configuration as above. Build `ALL_BUILD`, then `INSTALL`.
 
-#### Build DigiAsset Core
-
-Execute:
+### Build DigiAsset Core
 
 ```cmd
 .\config.bat
 ```
 
-Then open the solution file in Visual Studio, select the **same** build configuration ("Debug" or "Release") as in the previous steps, and run "Build" on `ALL_BUILD`. The `digiasset_core.exe` binary can be found inside the `DigiAsset_Core\build\src\Debug` or `DigiAsset_Core\build\src\Release` directory, depending on your chosen configuration. It should be launched from there since there are some DLL dependencies in that location.
+Open the solution file in `build\`, select the same configuration, and build `ALL_BUILD`.
+
+The `digiasset_core.exe` binary will be in `build\src\Release\` (or `Debug\`).
+
+## Optional Build Targets
+
+You can enable the CLI, Web server, and test suite by passing CMake options:
+
+```cmd
+cmake .. -DBUILD_CLI=ON -DBUILD_WEB=ON -DBUILD_TEST=ON
+```
+
+| Target | Binary | Description |
+|---|---|---|
+| `BUILD_CLI` | `digiasset_core-cli.exe` | Command-line RPC client |
+| `BUILD_WEB` | `digiasset_core-web.exe` | Web UI server (Boost Beast) |
+| `BUILD_TEST` | `Google_Tests_run.exe` | Google Test suite |
+
+The Web target requires Boost Beast headers. Install Boost 1.82+ via NuGet:
+
+```cmd
+nuget.exe install boost -Version 1.82.0 -OutputDirectory packages
+```
+
+### Performance Tuning
+
+For faster initial blockchain sync, add to `config.cfg`:
+
+```
+verifydatabasewrite=0
+```
+
+This disables SQLite write verification (fsync), significantly reducing sync time.
 
 
 ## Install DigiByte
