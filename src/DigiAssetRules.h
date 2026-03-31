@@ -95,7 +95,7 @@ public:
     void setDeflationary(uint64_t deflateRate);
 
     //comparators
-    bool operator==(const DigiAssetRules& b); //needed for testing class
+    bool operator==(const DigiAssetRules& b) const; //needed for testing class
 
 
     Json::Value toJSON();

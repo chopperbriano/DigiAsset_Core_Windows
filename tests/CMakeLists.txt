@@ -6,7 +6,11 @@ add_subdirectory(lib/googletest)
 include_directories(${gtest_SOURCE_DIR}/include ${gtest_SOURCE_DIR})
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
-set(CMAKE_CXX_STANDARD 11)
+if(MSVC)
+  set(CMAKE_CXX_STANDARD 20)
+else()
+  set(CMAKE_CXX_STANDARD 11)
+endif()
 
 
 set(TESTS
@@ -28,9 +32,23 @@ endforeach()
 
 # 'Google_Tests_run' is the target name
 # 'test1.cpp tests2.cpp' are source files with tests
-add_executable(Google_Tests_run ${TESTS})   #digibyteapi
-target_link_libraries(Google_Tests_run digiasset_core_lib sqlite3 curl)
-target_link_libraries(Google_Tests_run gtest gtest_main)
-target_link_libraries(Google_Tests_run ssl crypto pthread)
+include_directories("${CMAKE_SOURCE_DIR}/jsoncpp/install/include")
+include_directories("${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/include")
+include_directories("${CMAKE_SOURCE_DIR}/src")
 
-target_link_libraries(Google_Tests_run /lib/x86_64-linux-gnu/libjsoncpp.so jsonrpccpp-common jsonrpccpp-client)
+add_executable(Google_Tests_run ${TESTS})   #digibyteapi
+target_link_libraries(Google_Tests_run digiasset_core_lib)
+target_link_libraries(Google_Tests_run gtest gtest_main)
+
+if(WIN32 AND MSVC)
+  # Disable C++20 char8_t breaking change (u8"" literals stay as const char[])
+  target_compile_options(Google_Tests_run PRIVATE /Zc:char8_t-)
+  target_link_libraries(Google_Tests_run "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
+  target_link_libraries(Google_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-common.lib")
+  target_link_libraries(Google_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-client.lib")
+  target_link_libraries(Google_Tests_run winhttp)
+else()
+  target_link_libraries(Google_Tests_run sqlite3 curl)
+  target_link_libraries(Google_Tests_run ssl crypto pthread)
+  target_link_libraries(Google_Tests_run /lib/x86_64-linux-gnu/libjsoncpp.so jsonrpccpp-common jsonrpccpp-client)
+endif()

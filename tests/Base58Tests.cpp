@@ -36,8 +36,8 @@ TEST(base58, RandomTest) {
 
     std::random_device device;
     std::mt19937 generator(device());
-    std::uniform_int_distribution<uint8_t> d1(1, 100);
-    std::uniform_int_distribution<uint8_t> d2(0, 255);
+    std::uniform_int_distribution<unsigned int> d1(1, 100);
+    std::uniform_int_distribution<unsigned int> d2(0, 255);
 
     auto create_data = [&]() -> std::vector<uint8_t> {
         std::vector<uint8_t> data(d1(generator));

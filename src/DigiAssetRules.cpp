@@ -570,7 +570,7 @@ void DigiAssetRules::setDeflationary(uint64_t deflateRate) {
     _deflate = deflateRate;
 }
 
-bool DigiAssetRules::operator==(const DigiAssetRules& b) {
+bool DigiAssetRules::operator==(const DigiAssetRules& b) const {
     if (b._noRules != _noRules) return false;
     if (b._rewritable != _rewritable) return false;
     if (b._movable != _movable) return false;

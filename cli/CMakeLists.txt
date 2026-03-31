@@ -4,16 +4,14 @@ project(digiasset_core-cli)
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 set(CMAKE_CXX_STANDARD 11)
-FIND_PACKAGE(JSONCPP REQUIRED)
-FIND_PACKAGE(JSONRPCCPP REQUIRED)
-find_package(CURL REQUIRED)
 
-add_library(llibcurl STATIC IMPORTED)
-
+include_directories("${CMAKE_SOURCE_DIR}/jsoncpp/install/include")
+include_directories("${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/include")
+include_directories("${CMAKE_SOURCE_DIR}/src")
 
 set(HEADER_FILES
         ../src/Config.h
-        ../src/DigiByteCore.cpp
+        ../src/DigiByteCore.h
         )
 
 set(SOURCE_FILES
@@ -21,25 +19,35 @@ set(SOURCE_FILES
         ../src/DigiByteCore.cpp
         )
 
-add_executable(digiasset_core-cli main.cpp ${SOURCE_FILES} ${HEADER_FILES})
+if(WIN32 AND MSVC)
+  # On Windows, use the WinHTTP curl stubs and local jsonrpccpp sources
+  list(APPEND SOURCE_FILES
+        ../src/curl_stubs.cpp
+        ../src/jsonrpccpp/common/exception.cpp
+        ../src/jsonrpccpp/common/errors.cpp
+        ../src/jsonrpccpp/client/client.cpp
+        ../src/jsonrpccpp/client/connectors/httpclient.cpp
+        )
 
+  add_executable(digiasset_core-cli main.cpp ${SOURCE_FILES} ${HEADER_FILES})
 
-
-
-target_link_libraries(digiasset_core-cli PRIVATE CURL::libcurl)
-
-# Platform-specific libraries.
-if(WIN32)
-  find_package(jsoncpp REQUIRED)
-  target_link_libraries(digiasset_core-cli PRIVATE jsoncpp_static)
+  target_link_libraries(digiasset_core-cli PRIVATE "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
+  target_link_libraries(digiasset_core-cli PRIVATE "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-common.lib")
+  target_link_libraries(digiasset_core-cli PRIVATE "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-client.lib")
+  target_link_libraries(digiasset_core-cli PRIVATE winhttp)
 else()
+  FIND_PACKAGE(JSONCPP REQUIRED)
+  FIND_PACKAGE(JSONRPCCPP REQUIRED)
+  find_package(CURL REQUIRED)
+
+  add_executable(digiasset_core-cli main.cpp ${SOURCE_FILES} ${HEADER_FILES})
+
+  target_link_libraries(digiasset_core-cli PRIVATE CURL::libcurl)
   target_link_libraries(digiasset_core-cli PRIVATE ssl)
   target_link_libraries(digiasset_core-cli PRIVATE pthread)
   target_link_libraries(digiasset_core-cli PRIVATE /lib/x86_64-linux-gnu/libjsoncpp.so)
+  target_link_libraries(digiasset_core-cli PRIVATE jsonrpccpp-common)
+  target_link_libraries(digiasset_core-cli PRIVATE jsonrpccpp-client)
 endif()
-
-target_link_libraries(digiasset_core-cli PRIVATE jsonrpccpp-common)
-target_link_libraries(digiasset_core-cli PRIVATE jsonrpccpp-client)
-
 
 install(TARGETS digiasset_core-cli DESTINATION bin)
