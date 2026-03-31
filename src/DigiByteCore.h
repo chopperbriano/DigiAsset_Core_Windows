@@ -71,22 +71,31 @@ public:
         std::map<std::string, getrawtransaction_t> txData;
     };
 private:
-    // Continuous background fetching with its own RPC connection
+    // Continuous background fetching with multiple RPC connections
     std::mutex _prefetchMutex;
     std::condition_variable _prefetchCV;
     std::deque<PrefetchedBlock> _prefetchQueue;
-    std::thread _prefetchThread;
-    std::unique_ptr<jsonrpc::HttpClient> _prefetchHttpClient;
-    std::unique_ptr<jsonrpc::Client> _prefetchClient;
-    bool _prefetchConnected = false;
+
+    // Dispatcher thread assigns block hashes to worker threads
+    std::thread _dispatchThread;
+    void dispatchLoop();
+
+    // Worker threads fetch block data in parallel
+    static const size_t NUM_PREFETCH_WORKERS = 3;
+    struct PrefetchWorker {
+        std::unique_ptr<jsonrpc::HttpClient> httpClient;
+        std::unique_ptr<jsonrpc::Client> client;
+        bool connected = false;
+    };
+    PrefetchWorker _workers[NUM_PREFETCH_WORKERS];
+    void ensureWorkerConnection(PrefetchWorker& w);
+    blockinfo_t fetchBlockWith(PrefetchWorker& w, const std::string& hash);
+    getrawtransaction_t fetchRawTxWith(PrefetchWorker& w, const std::string& txid);
+
     std::atomic<bool> _prefetchStop{false};
     std::string _prefetchNextHash;
     unsigned int _prefetchHeight = 0;
-    static const size_t PREFETCH_BUFFER_SIZE = 16;
-    void ensurePrefetchConnection();
-    void prefetchLoop();
-    getrawtransaction_t fetchRawTxPrefetch(const std::string& txid);
-    blockinfo_t fetchBlockPrefetch(const std::string& hash);
+    static const size_t PREFETCH_BUFFER_SIZE = 32;
 
 public:
     enum AddressTypes {

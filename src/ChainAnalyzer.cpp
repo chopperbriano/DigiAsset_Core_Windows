@@ -290,6 +290,7 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
     bool pipelineActive = false;
+    int insertBatch = 0;
     stringstream ss;
 
     blockinfo_t blockData = dgb->getBlock(hash);
@@ -305,11 +306,11 @@ void ChainAnalyzer::phaseSync() {
         bool needsAssetProcessing = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
         if (!_showAllBlockSyncTime && (_height % 100 == 0)) fastMode = bulkSync;
 
-        //start prefetch pipeline only during asset-era bulk sync (pre-asset blocks are faster without pipeline)
-        if (bulkSync && needsAssetProcessing && !pipelineActive && !blockData.nextblockhash.empty()) {
+        //start prefetch pipeline during bulk sync (skips TX fetch for pre-asset blocks)
+        if (bulkSync && !pipelineActive && !blockData.nextblockhash.empty()) {
             dgb->startPrefetch(blockData.nextblockhash, _height + 1);
             pipelineActive = true;
-        } else if ((!bulkSync || !needsAssetProcessing) && pipelineActive) {
+        } else if (!bulkSync && pipelineActive) {
             dgb->stopPrefetch();
             pipelineActive = false;
         }
@@ -327,12 +328,12 @@ void ChainAnalyzer::phaseSync() {
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
         //process each tx in block
-        db->startTransaction();
-        if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) {
+        if (needsAssetProcessing) {
+            db->startTransaction();
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
+            db->endTransaction();
         }
-        db->endTransaction();
 
         //show run time stats
         totalProcessed++;
@@ -406,11 +407,22 @@ void ChainAnalyzer::phaseSync() {
             blockData = dgb->getBlock(hash);
         }
 
-        //save block header to database
+        //save block header to database (batched for pre-asset blocks)
+        if (!needsAssetProcessing && insertBatch == 0) {
+            db->startTransaction();
+        }
         db->insertBlock(blockData.height, blockData.hash, blockData.time, blockData.algo, blockData.difficulty);
+        if (!needsAssetProcessing) {
+            insertBatch++;
+            if (insertBatch >= 100) {
+                db->endTransaction();
+                insertBatch = 0;
+            }
+        }
     }
 
     //cleanup
+    if (insertBatch > 0) db->endTransaction();
     if (pipelineActive) dgb->stopPrefetch();
 }
 
