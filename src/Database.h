@@ -33,6 +33,7 @@
 #include <mutex>
 #include <sqlite3.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct PerformanceIndex {
@@ -84,6 +85,14 @@ struct BlockBasics {
 class Database {
 private:
     sqlite3* _db = nullptr;
+
+    // In-memory cache of non-asset UTXOs to avoid RPC fallback in getAssetUTXO
+    // Stores address + digibyte amount for UTXOs skipped during createUTXO
+    struct NonAssetUtxoInfo {
+        std::string address;
+        uint64_t digibyte;
+    };
+    std::unordered_map<std::string, NonAssetUtxoInfo> _nonAssetUtxoCache;
     Statement _stmtCheckFlag;
     Statement _stmtSetFlag;
     Statement _stmtGetBlockHeight;

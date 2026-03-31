@@ -352,6 +352,22 @@ void ChainAnalyzer::phaseSync() {
                 }
                 log->addMessage(ss.str());
                 ss.str(""); ss.clear();
+
+                // Periodic profiling every 1000 blocks
+                if (_height % 1000 == 999 && _processTransactionRunCount > 0) {
+                    ss << "PROFILE: " << _processTransactionRunCount << " txs"
+                       << " | parse=" << (_processTransactionRunTime / 1000) << "ms"
+                       << " save=" << (_saveTransactionRunTime / 1000) << "ms"
+                       << " cache=" << (_clearAddressCacheRunTime / 1000) << "ms";
+                    log->addMessage(ss.str());
+                    ss.str(""); ss.clear();
+                    _processTransactionRunTime = 0;
+                    _processTransactionRunCount = 0;
+                    _saveTransactionRunTime = 0;
+                    _saveTransactionRunCount = 0;
+                    _clearAddressCacheRunTime = 0;
+                    _clearAddressCacheRunCount = 0;
+                }
             }
         } else {
             chrono::steady_clock::time_point endTime = chrono::steady_clock::now();

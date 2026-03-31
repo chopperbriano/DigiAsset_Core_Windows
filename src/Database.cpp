@@ -1274,7 +1274,9 @@ std::vector<BlockBasics> Database::getLastBlocks(unsigned int limit, unsigned in
 void Database::createUTXO(const AssetUTXO& value, unsigned int heightCreated, bool assetIssuance) {
     if (value.address.empty()) return; //op return don't store
     if (value.assets.empty() && getBeenPrunedNonAssetUTXOHistory()) {
-        //_recentNonAssetUTXO.add(value.txid, value.vout); //keep temp cache that this is non asset utxo
+        // Cache address + value so getAssetUTXO can return it without an RPC call
+        std::string key = value.txid + ":" + std::to_string(value.vout);
+        _nonAssetUtxoCache[key] = {value.address, value.digibyte};
         return; //non asset utxo and we aren't storing those
     }
     int rc;
@@ -1441,6 +1443,20 @@ AssetUTXO Database::getAssetUTXO(const string& txid, unsigned int vout, unsigned
             }
         }
         if (exists) return result;
+    }
+
+    // Check if this was a known non-asset UTXO that we skipped storing
+    std::string cacheKey = txid + ":" + std::to_string(vout);
+    auto cacheIt = _nonAssetUtxoCache.find(cacheKey);
+    if (cacheIt != _nonAssetUtxoCache.end()) {
+        // Known non-asset UTXO — return cached data directly (zero RPC)
+        result.txid = txid;
+        result.vout = vout;
+        result.address = cacheIt->second.address;
+        result.digibyte = cacheIt->second.digibyte;
+        result.assets.clear();
+        _nonAssetUtxoCache.erase(cacheIt);
+        return result;
     }
 
     //check if we can/should get from the wallet

@@ -4,6 +4,7 @@
 
 #include "DigiByteCore.h"
 #include "Config.h"
+#include "Log.h"
 #include <fstream>
 #include <future>
 #include <iostream>
