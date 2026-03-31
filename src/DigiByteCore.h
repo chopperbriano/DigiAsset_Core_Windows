@@ -81,7 +81,8 @@ private:
     bool _prefetchConnected = false;
     std::atomic<bool> _prefetchStop{false};
     std::string _prefetchNextHash;
-    static const size_t PREFETCH_BUFFER_SIZE = 8;
+    unsigned int _prefetchHeight = 0;
+    static const size_t PREFETCH_BUFFER_SIZE = 16;
     void ensurePrefetchConnection();
     void prefetchLoop();
     getrawtransaction_t fetchRawTxPrefetch(const std::string& txid);
@@ -131,7 +132,7 @@ public:
     getrawtransaction_t getRawTransaction(const std::string& txid);
 
     // Block prefetch pipeline — call startPrefetch to begin background fetching
-    void startPrefetch(const std::string& startHash);
+    void startPrefetch(const std::string& startHash, unsigned int startHeight = 0);
     void stopPrefetch();
     bool getNextPrefetchedBlock(PrefetchedBlock& out);
     void loadTxCache(std::map<std::string, getrawtransaction_t>& txData);

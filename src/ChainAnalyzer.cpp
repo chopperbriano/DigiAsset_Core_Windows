@@ -302,13 +302,14 @@ void ChainAnalyzer::phaseSync() {
         //determine sync mode
         _state = 0 - blockData.confirmations;
         bool bulkSync = (_state < -110);
+        bool needsAssetProcessing = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
         if (!_showAllBlockSyncTime && (_height % 100 == 0)) fastMode = bulkSync;
 
-        //start prefetch pipeline during bulk sync
-        if (bulkSync && !pipelineActive && !blockData.nextblockhash.empty()) {
-            dgb->startPrefetch(blockData.nextblockhash);
+        //start prefetch pipeline only during asset-era bulk sync (pre-asset blocks are faster without pipeline)
+        if (bulkSync && needsAssetProcessing && !pipelineActive && !blockData.nextblockhash.empty()) {
+            dgb->startPrefetch(blockData.nextblockhash, _height + 1);
             pipelineActive = true;
-        } else if (!bulkSync && pipelineActive) {
+        } else if ((!bulkSync || !needsAssetProcessing) && pipelineActive) {
             dgb->stopPrefetch();
             pipelineActive = false;
         }
@@ -381,7 +382,7 @@ void ChainAnalyzer::phaseSync() {
         _nextHash = blockData.nextblockhash;
         _height++;
 
-        //get next block — from pipeline if active, otherwise via RPC
+        //get next block — from pipeline if active, otherwise via direct RPC
         if (pipelineActive) {
             DigiByteCore::PrefetchedBlock pb;
             if (dgb->getNextPrefetchedBlock(pb)) {
@@ -392,11 +393,16 @@ void ChainAnalyzer::phaseSync() {
                 //pipeline failed — fall back to direct RPC
                 dgb->stopPrefetch();
                 pipelineActive = false;
-                hash = dgb->getBlockHash(_height);
+                hash = _nextHash;
                 blockData = dgb->getBlock(hash);
             }
         } else {
-            hash = dgb->getBlockHash(_height);
+            //direct RPC — trust nextblockhash during bulk sync, verify every 100 blocks
+            if (bulkSync && (_height % 100 != 0)) {
+                hash = _nextHash;
+            } else {
+                hash = dgb->getBlockHash(_height);
+            }
             blockData = dgb->getBlock(hash);
         }
 

@@ -305,19 +305,24 @@ getrawtransaction_t DigiByteCore::fetchRawTxPrefetch(const string& txid) {
 
 void DigiByteCore::prefetchLoop() {
     std::string hash = _prefetchNextHash;
+    unsigned int height = _prefetchHeight;
     while (!_prefetchStop) {
         try {
-            // Fetch block
+            // Fetch block header
             blockinfo_t block = fetchBlockPrefetch(hash);
+            height = block.height;
 
-            // Fetch all TXs in this block
             PrefetchedBlock pb;
             pb.block = block;
-            for (const auto& txid : block.tx) {
-                try {
-                    pb.txData[txid] = fetchRawTxPrefetch(txid);
-                } catch (...) {
-                    // TX fetch failed — main thread will fetch on demand
+
+            // Only fetch TX data for blocks that will actually be processed
+            // Pre-asset blocks (< 8432316) skip TX processing entirely
+            if (height >= 8432316) {
+                for (const auto& txid : block.tx) {
+                    if (_prefetchStop) break;
+                    try {
+                        pb.txData[txid] = fetchRawTxPrefetch(txid);
+                    } catch (...) {}
                 }
             }
 
@@ -330,30 +335,28 @@ void DigiByteCore::prefetchLoop() {
                 if (_prefetchStop) break;
                 _prefetchQueue.push_back(std::move(pb));
             }
-            _prefetchCV.notify_one(); // wake consumer
+            _prefetchCV.notify_one();
 
-            // Move to next block
             if (block.nextblockhash.empty()) {
-                // At chain tip — wait a bit and retry
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             }
             hash = block.nextblockhash;
 
         } catch (...) {
-            // RPC error — wait briefly and retry
             if (_prefetchStop) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
 }
 
-void DigiByteCore::startPrefetch(const string& startHash) {
+void DigiByteCore::startPrefetch(const string& startHash, unsigned int startHeight) {
     stopPrefetch();
     ensurePrefetchConnection();
     if (!_prefetchConnected) return;
     _prefetchStop = false;
     _prefetchNextHash = startHash;
+    _prefetchHeight = startHeight;
     _prefetchThread = std::thread(&DigiByteCore::prefetchLoop, this);
 }
 
