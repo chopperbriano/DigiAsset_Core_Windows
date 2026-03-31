@@ -290,14 +290,30 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
     int blocksInTransaction = 0;
-    const int BATCH_SIZE = 50; // commit every 50 blocks during bulk sync
+    const int BATCH_SIZE = 50;
+    bool pipelineActive = false;
     stringstream ss;
-    blockinfo_t blockData = dgb->getBlock(hash); //get first blocks data in syncing process(all future ones are at end of loop)
+
+    blockinfo_t blockData = dgb->getBlock(hash);
+
     while ((hash == _nextHash) && !stopRequested()) {
         if (totalProcessed == 0) {
             beginTotalTime = chrono::steady_clock::now();
         }
-        if (!_showAllBlockSyncTime && (_height % 100 == 0)) fastMode = (_state < -110);
+
+        //determine sync mode
+        _state = 0 - blockData.confirmations;
+        bool bulkSync = (_state < -110);
+        if (!_showAllBlockSyncTime && (_height % 100 == 0)) fastMode = bulkSync;
+
+        //start prefetch pipeline during bulk sync
+        if (bulkSync && !pipelineActive && !blockData.nextblockhash.empty()) {
+            dgb->startPrefetch(blockData.nextblockhash);
+            pipelineActive = true;
+        } else if (!bulkSync && pipelineActive) {
+            dgb->stopPrefetch();
+            pipelineActive = false;
+        }
 
         //show processing block
         if (fastMode) {
@@ -309,70 +325,45 @@ void ChainAnalyzer::phaseSync() {
             ss << "processed block: " << setw(9) << _height;
             beginTime = chrono::steady_clock::now();
         }
-
-        //process block
-        _state = 0 - blockData.confirmations;                        //calculate how far behind we are
-        if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") "; //+1 because message is related to after block is done
+        if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
         //process each tx in block (batched in SQLite transaction)
-        //during bulk sync, batch multiple blocks per transaction for throughput
         if (blocksInTransaction == 0) {
             db->startTransaction();
         }
-        if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) { //only non asset utxo below this height
+        if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) {
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
         }
         blocksInTransaction++;
-        bool shouldCommit = (_state >= -10) || (blocksInTransaction >= BATCH_SIZE);
-        if (shouldCommit) {
+        if ((_state >= -10) || (blocksInTransaction >= BATCH_SIZE)) {
             db->endTransaction();
             blocksInTransaction = 0;
         }
-
 
         //show run time stats
         totalProcessed++;
         if (fastMode) {
             if (_height % 100 == 99) {
-                //estimate sync time left
                 chrono::steady_clock::time_point endTime = chrono::steady_clock::now();
                 unsigned long msRemaining = blockData.confirmations * chrono::duration_cast<chrono::milliseconds>(endTime - beginTotalTime).count() / totalProcessed;
-
-                //show message
-                ss << " in " << setw(6)
-                   << chrono::duration_cast<chrono::milliseconds>(endTime - beginTime).count() / 100
-                   << " ms per block - ";
-
-                // Convert to the most significant unit
-                const unsigned long msPerMinute = 60000;
-                const unsigned long msPerHour = 3600000;
-                const unsigned long msPerDay = 86400000;
+                ss << " in " << setw(6) << chrono::duration_cast<chrono::milliseconds>(endTime - beginTime).count() / 100 << " ms per block - ";
+                const unsigned long msPerMinute = 60000, msPerHour = 3600000, msPerDay = 86400000;
                 if (msRemaining >= msPerDay * 2) {
-                    // Convert to days if more than 2 days
-                    double days = msRemaining / static_cast<double>(msPerDay);
-                    ss << std::fixed << std::setprecision(1) << days << " days left to sync";
+                    ss << std::fixed << std::setprecision(1) << msRemaining / (double)msPerDay << " days left to sync";
                 } else if (msRemaining >= msPerHour * 2) {
-                    // Convert to hours if more than 2 hours
-                    double hours = msRemaining / static_cast<double>(msPerHour);
-                    ss << std::fixed << std::setprecision(1) << hours << " hours left to sync";
+                    ss << std::fixed << std::setprecision(1) << msRemaining / (double)msPerHour << " hours left to sync";
                 } else {
-                    // Convert to minutes for anything less
-                    double minutes = msRemaining / static_cast<double>(msPerMinute);
-                    ss << std::fixed << std::setprecision(1) << minutes << " minutes left to sync";
+                    ss << std::fixed << std::setprecision(1) << msRemaining / (double)msPerMinute << " minutes left to sync";
                 }
-
                 log->addMessage(ss.str());
-                ss.str("");
-                ss.clear();
+                ss.str(""); ss.clear();
             }
         } else {
             chrono::steady_clock::time_point endTime = chrono::steady_clock::now();
-            ss << " in " << setw(6)
-               << chrono::duration_cast<chrono::milliseconds>(endTime - beginTime).count() << " ms per block";
+            ss << " in " << setw(6) << chrono::duration_cast<chrono::milliseconds>(endTime - beginTime).count() << " ms per block";
             log->addMessage(ss.str());
-            ss.str("");
-            ss.clear();
+            ss.str(""); ss.clear();
         }
 
         //clear invalid RPC cached
@@ -383,65 +374,48 @@ void ChainAnalyzer::phaseSync() {
 
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
-            //commit any open batch transaction before waiting
-            if (blocksInTransaction > 0) {
-                db->endTransaction();
-                blocksInTransaction = 0;
-            }
-            //see if any performance indexes need to be added(do before marking as synced will set state to BUSY if there is anything to do)
+            if (blocksInTransaction > 0) { db->endTransaction(); blocksInTransaction = 0; }
+            if (pipelineActive) { dgb->stopPrefetch(); pipelineActive = false; }
             db->executePerformanceIndex(_state);
-
-            //mark as synced
             _state = SYNCED;
-            totalProcessed = 0; //don't track waiting time
-
-            //pause for 0.5 sec
+            totalProcessed = 0;
             chrono::milliseconds dura(500);
             this_thread::sleep_for(dura);
-
-            //check current block has not changed
             string currentHash = dgb->getBlockHash(_height);
-            if (hash != currentHash) {
-                _state = REWINDING;
-                return;
-            }
-
-            //update blockData so we can exit loop
+            if (hash != currentHash) { _state = REWINDING; return; }
             blockData = dgb->getBlock(hash);
         }
 
-        //get what would be next block based on the block we just processed
+        //advance to next block
         _nextHash = blockData.nextblockhash;
         _height++;
 
-        //during bulk sync (>10 blocks behind), trust nextblockhash to skip a getBlockHash RPC call
-        //only verify via getBlockHash every 100 blocks or when close to chain tip
-        if (_state < -10 && (_height % 100 != 0)) {
-            hash = _nextHash;
+        //get next block — from pipeline if active, otherwise via RPC
+        if (pipelineActive) {
+            DigiByteCore::PrefetchedBlock pb;
+            if (dgb->getNextPrefetchedBlock(pb)) {
+                blockData = std::move(pb.block);
+                dgb->loadTxCache(pb.txData);
+                hash = blockData.hash;
+            } else {
+                //pipeline failed — fall back to direct RPC
+                dgb->stopPrefetch();
+                pipelineActive = false;
+                hash = dgb->getBlockHash(_height);
+                blockData = dgb->getBlock(hash);
+            }
         } else {
             hash = dgb->getBlockHash(_height);
+            blockData = dgb->getBlock(hash);
         }
 
-        //wait for any in-flight prefetch to finish before we fetch this block
-        dgb->waitForPrefetch();
-        blockData = dgb->getBlock(hash);
-
-        //save the next block to be processed to the database
+        //save block header to database
         db->insertBlock(blockData.height, blockData.hash, blockData.time, blockData.algo, blockData.difficulty);
-
-        //prefetch this block's transactions in background while we loop back to process it
-        if (_state < -10 && !blockData.tx.empty()) {
-            dgb->prefetchBlockTxs(blockData.tx);
-        }
     }
 
-    //commit any remaining open batch transaction
-    if (blocksInTransaction > 0) {
-        db->endTransaction();
-    }
-
-    //wait for any in-flight prefetch
-    dgb->waitForPrefetch();
+    //cleanup
+    if (blocksInTransaction > 0) db->endTransaction();
+    if (pipelineActive) dgb->stopPrefetch();
 }
 
 void ChainAnalyzer::phasePrune() {

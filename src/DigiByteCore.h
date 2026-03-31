@@ -12,6 +12,9 @@
 #include <iomanip>
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <random>
@@ -57,14 +60,32 @@ class DigiByteCore {
     long long _runTime = 0;
     unsigned int _runCount = 0;
 
-    // TX prefetch — uses a separate RPC connection so it doesn't block the main thread
+    // TX cache for prefetched data (loaded before processing a block)
     std::mutex _txCacheMutex;
     std::map<std::string, getrawtransaction_t> _txCache;
+
+public:
+    // Block prefetch pipeline
+    struct PrefetchedBlock {
+        blockinfo_t block;
+        std::map<std::string, getrawtransaction_t> txData;
+    };
+private:
+    // Continuous background fetching with its own RPC connection
+    std::mutex _prefetchMutex;
+    std::condition_variable _prefetchCV;
+    std::deque<PrefetchedBlock> _prefetchQueue;
     std::thread _prefetchThread;
     std::unique_ptr<jsonrpc::HttpClient> _prefetchHttpClient;
     std::unique_ptr<jsonrpc::Client> _prefetchClient;
     bool _prefetchConnected = false;
+    std::atomic<bool> _prefetchStop{false};
+    std::string _prefetchNextHash;
+    static const size_t PREFETCH_BUFFER_SIZE = 8;
     void ensurePrefetchConnection();
+    void prefetchLoop();
+    getrawtransaction_t fetchRawTxPrefetch(const std::string& txid);
+    blockinfo_t fetchBlockPrefetch(const std::string& hash);
 
 public:
     enum AddressTypes {
@@ -108,8 +129,12 @@ public:
     std::string getBlockHash(uint height);
     blockinfo_t getBlock(const std::string& hash);
     getrawtransaction_t getRawTransaction(const std::string& txid);
-    void prefetchBlockTxs(const std::vector<std::string>& txids);
-    void waitForPrefetch();
+
+    // Block prefetch pipeline — call startPrefetch to begin background fetching
+    void startPrefetch(const std::string& startHash);
+    void stopPrefetch();
+    bool getNextPrefetchedBlock(PrefetchedBlock& out);
+    void loadTxCache(std::map<std::string, getrawtransaction_t>& txData);
     std::vector<unspenttxout_t> listUnspent(int minconf = 1, int maxconf = 99999999, const std::vector<std::string>& addresses = {});
     getaddressinfo_t getAddressInfo(const std::string& address);
 
