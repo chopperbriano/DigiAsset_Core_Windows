@@ -63,6 +63,12 @@ bool ConsoleDashboard::enableVT100() {
 void ConsoleDashboard::start() {
     if (_running) return;
     _running = true;
+#ifdef _WIN32
+    SetConsoleTitleA("DigiAsset Core");
+#endif
+    // Clear the screen and render immediately so the user sees the dashboard
+    std::cout << ESC "2J" << CURSOR_HOME << std::flush;
+    render();
     _thread = std::thread(&ConsoleDashboard::refreshLoop, this);
 }
 

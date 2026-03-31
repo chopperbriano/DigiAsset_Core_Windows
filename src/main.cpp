@@ -14,6 +14,7 @@
 
 
 int main() {
+  try {
     ///When updating bootstrap image change both values.   Reviewers make sure this value is only ever changed by trusted party
     const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM"};
     const string officialBootstrapCID = "QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU";
@@ -252,4 +253,16 @@ int main() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(100));
     }
+
+  } catch (const std::exception& e) {
+    std::cerr << "\nFATAL: " << e.what() << std::endl;
+    std::cerr << "Press Enter to exit..." << std::endl;
+    std::cin.get();
+    return 1;
+  } catch (...) {
+    std::cerr << "\nFATAL: Unknown error" << std::endl;
+    std::cerr << "Press Enter to exit..." << std::endl;
+    std::cin.get();
+    return 1;
+  }
 }
