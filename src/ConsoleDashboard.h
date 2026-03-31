@@ -6,6 +6,7 @@
 #define DIGIASSET_CORE_CONSOLEDASHBOARD_H
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -53,6 +54,10 @@ private:
     unsigned int _lastHeight = 0;
     std::chrono::steady_clock::time_point _lastTime;
     double _blocksPerSec = 0.0;
+
+    // Cached asset count (refreshed every 5 seconds)
+    uint64_t _assetCount = 0;
+    std::chrono::steady_clock::time_point _lastAssetCountTime;
 
     // Console dimensions
     int _width = 80;

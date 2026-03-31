@@ -439,6 +439,9 @@ public:
     std::string getSendingAddress(const std::string& txid, unsigned int vout);
     void pruneUTXO(unsigned int height);
 
+    //asset stats
+    uint64_t getAssetCountOnChain();
+
     //utxo table asset related
     AssetUTXO getAssetUTXO(const std::string& txid, unsigned int vout, unsigned int height = 0);
     std::vector<AssetHolder> getAssetHolders(uint64_t assetIndex);

@@ -1614,6 +1614,22 @@ std::vector<AssetHolder> Database::getAssetHolders(string assetId) {
 }
 
 /**
+ * Returns the number of unique assets (distinct assetIds) on the chain.
+ */
+uint64_t Database::getAssetCountOnChain() {
+    char* zErrMsg = nullptr;
+    sqlite3_stmt* stmt = nullptr;
+    uint64_t count = 0;
+    if (sqlite3_prepare_v2(_db, "SELECT COUNT(DISTINCT assetId) FROM assets", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int64(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
+/**
  * Returns the total number assets that exist of this specific type.
  * The difference between this and the other getTotalAssetCount function is that if the asset has sub types this will only give total of the sub type provided
  * @param assetIndex

@@ -193,9 +193,21 @@ void ConsoleDashboard::render() {
         etaText = "Complete";
     }
 
+    // Asset count (query at most once every 5 seconds to avoid DB load)
+    Database* db = app->getDatabaseIfSet();
+    if (db && elapsed >= 1.0) {
+        auto timeSinceAssetQuery = std::chrono::duration<double>(now - _lastAssetCountTime).count();
+        if (timeSinceAssetQuery >= 5.0 || _assetCount == 0) {
+            try {
+                _assetCount = db->getAssetCountOnChain();
+                _lastAssetCountTime = now;
+            } catch (...) {}
+        }
+    }
+
     // Connection status
     bool dgbOnline = (dgb != nullptr);
-    bool dbOnline = (app->getDatabaseIfSet() != nullptr);
+    bool dbOnline = (db != nullptr);
     bool ipfsOnline = (app->getIPFSIfSet() != nullptr);
     RPC::Server* rpcServer = app->getRpcServerIfSet();
     bool rpcOnline = (rpcServer != nullptr);
@@ -262,7 +274,16 @@ void ConsoleDashboard::render() {
     out << ERASE_LINE << "  Progress:  " << progressBar(progress, barWidth);
     out << " " << std::fixed << std::setprecision(1) << (progress * 100.0) << "%\n";
 
-    // Row 11: separator
+    // Asset count
+    out << ERASE_LINE << "  Assets:        " << FG_BRIGHT_WHITE;
+    if (_assetCount > 0) {
+        out << formatNumber(_assetCount) << " unique assets on chain";
+    } else {
+        out << DIM << "--";
+    }
+    out << RESET << "\n";
+
+    // Row separator
     out << ERASE_LINE << std::string(w, '-') << "\n";
 
     // Row 12+: Recent Log Messages
