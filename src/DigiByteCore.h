@@ -57,11 +57,14 @@ class DigiByteCore {
     long long _runTime = 0;
     unsigned int _runCount = 0;
 
-    // TX prefetch cache — populated by prefetchBlockTxs(), consumed by getRawTransaction()
+    // TX prefetch — uses a separate RPC connection so it doesn't block the main thread
     std::mutex _txCacheMutex;
     std::map<std::string, getrawtransaction_t> _txCache;
     std::thread _prefetchThread;
-    bool _prefetchRunning = false;
+    std::unique_ptr<jsonrpc::HttpClient> _prefetchHttpClient;
+    std::unique_ptr<jsonrpc::Client> _prefetchClient;
+    bool _prefetchConnected = false;
+    void ensurePrefetchConnection();
 
 public:
     enum AddressTypes {

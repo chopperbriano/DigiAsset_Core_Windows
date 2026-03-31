@@ -29,6 +29,8 @@ mutex DigiByteCore::_mutex;
 
 DigiByteCore::~DigiByteCore() {
     waitForPrefetch();
+    _prefetchClient.reset();
+    _prefetchHttpClient.reset();
     dropConnection();
 }
 
@@ -192,26 +194,98 @@ getrawtransaction_t DigiByteCore::getRawTransaction(const string& txid) {
 }
 
 /**
+ * Creates a second RPC connection for prefetching, using the same config.
+ * This connection is independent from the main one so they can run in parallel.
+ */
+void DigiByteCore::ensurePrefetchConnection() {
+    if (_prefetchConnected) return;
+    try {
+        Config config = Config(_configFileName);
+        std::string url = "http://" + config.getString("rpcuser") + ":" +
+                          config.getString("rpcpassword") + "@" +
+                          config.getString("rpcbind", "127.0.0.1") + ":" +
+                          std::to_string(config.getInteger("rpcport", 14022));
+        _prefetchHttpClient.reset(new jsonrpc::HttpClient(url));
+        _prefetchClient.reset(new jsonrpc::Client(*_prefetchHttpClient, jsonrpc::JSONRPC_CLIENT_V1));
+        _prefetchHttpClient->SetTimeout(config.getInteger("rpctimeout", 50000));
+        _prefetchConnected = true;
+    } catch (...) {
+        _prefetchConnected = false;
+    }
+}
+
+/**
  * Prefetch all transactions for a block in a background thread.
+ * Uses a dedicated RPC connection so it runs in parallel with the main thread.
  * Call this with the next block's txids while processing the current block.
- * The prefetched data is stored in _txCache and consumed by getRawTransaction().
  */
 void DigiByteCore::prefetchBlockTxs(const vector<string>& txids) {
     waitForPrefetch(); // ensure previous prefetch is done
-    _prefetchRunning = true;
+    ensurePrefetchConnection();
+    if (!_prefetchConnected) return;
+
+    // Clear old cache
+    {
+        std::lock_guard<std::mutex> lock(_txCacheMutex);
+        _txCache.clear();
+    }
+
     _prefetchThread = std::thread([this, txids]() {
         for (const auto& txid : txids) {
             try {
-                getrawtransaction_t tx = errorCheckAPI([&] {
-                    return getrawtransaction(txid, true);
-                });
+                Value params;
+                params.append(txid);
+                params.append(true);
+                Value result = _prefetchClient->CallMethod("getrawtransaction", params);
+
+                // Parse into getrawtransaction_t (same as getrawtransaction() private method)
+                getrawtransaction_t ret;
+                ret.hex = result["hex"].asString();
+                ret.txid = result["txid"].asString();
+                ret.hash = result["hash"].asString();
+                ret.size = result["size"].asUInt();
+                ret.vsize = result["vsize"].asUInt();
+                ret.weight = result["weight"].asUInt();
+                ret.version = result["version"].asInt();
+                ret.locktime = result["locktime"].asInt();
+                for (auto it = result["vin"].begin(); it != result["vin"].end(); it++) {
+                    Value val = (*it);
+                    vin_t input;
+                    input.txid = val["txid"].asString();
+                    input.n = val["vout"].asUInt();
+                    input.scriptSig.assm = val["scriptSig"]["asm"].asString();
+                    input.scriptSig.hex = val["scriptSig"]["hex"].asString();
+                    for (auto it3 = val["txinwitness"].begin(); it3 != val["txinwitness"].end(); it3++) {
+                        input.txinwitness.push_back((*it3).asString());
+                    }
+                    ret.vin.push_back(input);
+                }
+                for (auto it = result["vout"].begin(); it != result["vout"].end(); it++) {
+                    Value val = (*it);
+                    vout_t output;
+                    output.value = val["value"].asDouble();
+                    output.valueS = (uint64_t)round(val["value"].asDouble() * 100000000);
+                    output.n = val["n"].asUInt();
+                    output.scriptPubKey.assm = val["scriptPubKey"]["asm"].asString();
+                    output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
+                    output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
+                    output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
+                    for (auto it2 = val["scriptPubKey"]["addresses"].begin();
+                         it2 != val["scriptPubKey"]["addresses"].end(); it2++) {
+                        output.scriptPubKey.addresses.push_back((*it2).asString());
+                    }
+                    ret.vout.push_back(output);
+                }
+                ret.blockhash = result["blockhash"].asString();
+                ret.time = result["time"].asUInt();
+                ret.blocktime = result["blocktime"].asUInt();
+
                 std::lock_guard<std::mutex> lock(_txCacheMutex);
-                _txCache[txid] = std::move(tx);
+                _txCache[txid] = std::move(ret);
             } catch (...) {
                 // If prefetch fails, getRawTransaction will fetch on demand
             }
         }
-        _prefetchRunning = false;
     });
 }
 
