@@ -125,16 +125,13 @@ void ConsoleDashboard::render() {
     std::string syncStatusText;
     std::string syncColor = FG_WHITE;
 
-    ChainAnalyzer* analyzer = app->getChainAnalyzer();
+    ChainAnalyzer* analyzer = app->getChainAnalyzerIfSet();
     if (analyzer) {
         syncState = analyzer->getSync();
         syncHeight = analyzer->getSyncHeight();
     }
 
-    DigiByteCore* dgb = nullptr;
-    if (app->isDigiByteCoreSet()) {
-        dgb = app->getDigiByteCore();
-    }
+    DigiByteCore* dgb = app->getDigiByteCoreIfSet();
 
     if (dgb) {
         try {
@@ -197,13 +194,14 @@ void ConsoleDashboard::render() {
     }
 
     // Connection status
-    bool dgbOnline = app->isDigiByteCoreSet();
-    bool dbOnline = (app->getDatabase() != nullptr);
-    bool ipfsOnline = (app->getIPFS() != nullptr);
-    bool rpcOnline = (app->getRpcServer() != nullptr);
+    bool dgbOnline = (dgb != nullptr);
+    bool dbOnline = (app->getDatabaseIfSet() != nullptr);
+    bool ipfsOnline = (app->getIPFSIfSet() != nullptr);
+    RPC::Server* rpcServer = app->getRpcServerIfSet();
+    bool rpcOnline = (rpcServer != nullptr);
     unsigned int rpcPort = 0;
     if (rpcOnline) {
-        rpcPort = app->getRpcServer()->getPort();
+        rpcPort = rpcServer->getPort();
     }
 
     // ---- Build output -------------------------------------------------------

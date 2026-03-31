@@ -67,6 +67,13 @@ public:
     void setRpcServer(RPC::Server* server);
     RPC::Server* getRpcServer();
 
+    // Null-safe getters (return nullptr instead of throwing)
+    Database* getDatabaseIfSet() { return _db; }
+    IPFS* getIPFSIfSet() { return _ipfs; }
+    DigiByteCore* getDigiByteCoreIfSet() { return _dgb; }
+    ChainAnalyzer* getChainAnalyzerIfSet() { return _analyzer; }
+    RPC::Server* getRpcServerIfSet() { return _rpcServer; }
+
     void reset();
 };
 
