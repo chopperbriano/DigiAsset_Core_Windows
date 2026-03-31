@@ -289,6 +289,8 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTime;
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
+    int blocksInTransaction = 0;
+    const int BATCH_SIZE = 50; // commit every 50 blocks during bulk sync
     stringstream ss;
     blockinfo_t blockData = dgb->getBlock(hash); //get first blocks data in syncing process(all future ones are at end of loop)
     while ((hash == _nextHash) && !stopRequested()) {
@@ -312,13 +314,21 @@ void ChainAnalyzer::phaseSync() {
         _state = 0 - blockData.confirmations;                        //calculate how far behind we are
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") "; //+1 because message is related to after block is done
 
-        //process each tx in block (all writes batched in one SQLite transaction)
-        db->startTransaction();
+        //process each tx in block (batched in SQLite transaction)
+        //during bulk sync, batch multiple blocks per transaction for throughput
+        if (blocksInTransaction == 0) {
+            db->startTransaction();
+        }
         if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) { //only non asset utxo below this height
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
         }
-        db->endTransaction();
+        blocksInTransaction++;
+        bool shouldCommit = (_state >= -10) || (blocksInTransaction >= BATCH_SIZE);
+        if (shouldCommit) {
+            db->endTransaction();
+            blocksInTransaction = 0;
+        }
 
 
         //show run time stats
@@ -373,6 +383,11 @@ void ChainAnalyzer::phaseSync() {
 
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
+            //commit any open batch transaction before waiting
+            if (blocksInTransaction > 0) {
+                db->endTransaction();
+                blocksInTransaction = 0;
+            }
             //see if any performance indexes need to be added(do before marking as synced will set state to BUSY if there is anything to do)
             db->executePerformanceIndex(_state);
 
@@ -406,10 +421,18 @@ void ChainAnalyzer::phaseSync() {
         } else {
             hash = dgb->getBlockHash(_height);
         }
+
+        //wait for any in-flight prefetch to finish before we fetch this block
+        dgb->waitForPrefetch();
         blockData = dgb->getBlock(hash);
 
         //save the next block to be processed to the database
         db->insertBlock(blockData.height, blockData.hash, blockData.time, blockData.algo, blockData.difficulty);
+
+        //prefetch this block's transactions in background while we loop back to process it
+        if (_state < -10 && !blockData.tx.empty()) {
+            dgb->prefetchBlockTxs(blockData.tx);
+        }
     }
 }
 

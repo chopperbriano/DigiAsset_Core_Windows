@@ -28,6 +28,7 @@ using namespace std;
 mutex DigiByteCore::_mutex;
 
 DigiByteCore::~DigiByteCore() {
+    waitForPrefetch();
     dropConnection();
 }
 
@@ -169,13 +170,55 @@ blockinfo_t DigiByteCore::getBlock(const std::string& hash) {
 }
 
 /**
- * Gets raw transaction data for any txid
+ * Gets raw transaction data for any txid.
+ * Checks the prefetch cache first to avoid redundant RPC calls.
  * Possible Errors: See errorCheckAPI
  */
 getrawtransaction_t DigiByteCore::getRawTransaction(const string& txid) {
+    // Check prefetch cache first
+    {
+        std::lock_guard<std::mutex> lock(_txCacheMutex);
+        auto it = _txCache.find(txid);
+        if (it != _txCache.end()) {
+            getrawtransaction_t result = std::move(it->second);
+            _txCache.erase(it);
+            return result;
+        }
+    }
+    // Cache miss — fetch directly
     return errorCheckAPI([&] {
         return getrawtransaction(txid, true);
     });
+}
+
+/**
+ * Prefetch all transactions for a block in a background thread.
+ * Call this with the next block's txids while processing the current block.
+ * The prefetched data is stored in _txCache and consumed by getRawTransaction().
+ */
+void DigiByteCore::prefetchBlockTxs(const vector<string>& txids) {
+    waitForPrefetch(); // ensure previous prefetch is done
+    _prefetchRunning = true;
+    _prefetchThread = std::thread([this, txids]() {
+        for (const auto& txid : txids) {
+            try {
+                getrawtransaction_t tx = errorCheckAPI([&] {
+                    return getrawtransaction(txid, true);
+                });
+                std::lock_guard<std::mutex> lock(_txCacheMutex);
+                _txCache[txid] = std::move(tx);
+            } catch (...) {
+                // If prefetch fails, getRawTransaction will fetch on demand
+            }
+        }
+        _prefetchRunning = false;
+    });
+}
+
+void DigiByteCore::waitForPrefetch() {
+    if (_prefetchThread.joinable()) {
+        _prefetchThread.join();
+    }
 }
 
 vector<unspenttxout_t> DigiByteCore::listUnspent(int minconf, int maxconf, const vector<string>& addresses) {

@@ -12,9 +12,11 @@
 #include <iomanip>
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
+#include <map>
 #include <mutex>
 #include <random>
 #include <string>
+#include <thread>
 
 #if defined(_WIN32)
 using uint = unsigned int;
@@ -54,6 +56,12 @@ class DigiByteCore {
 
     long long _runTime = 0;
     unsigned int _runCount = 0;
+
+    // TX prefetch cache — populated by prefetchBlockTxs(), consumed by getRawTransaction()
+    std::mutex _txCacheMutex;
+    std::map<std::string, getrawtransaction_t> _txCache;
+    std::thread _prefetchThread;
+    bool _prefetchRunning = false;
 
 public:
     enum AddressTypes {
@@ -97,6 +105,8 @@ public:
     std::string getBlockHash(uint height);
     blockinfo_t getBlock(const std::string& hash);
     getrawtransaction_t getRawTransaction(const std::string& txid);
+    void prefetchBlockTxs(const std::vector<std::string>& txids);
+    void waitForPrefetch();
     std::vector<unspenttxout_t> listUnspent(int minconf = 1, int maxconf = 99999999, const std::vector<std::string>& addresses = {});
     getaddressinfo_t getAddressInfo(const std::string& address);
 
