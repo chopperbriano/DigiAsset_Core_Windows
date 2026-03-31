@@ -231,60 +231,72 @@ void DigiByteCore::prefetchBlockTxs(const vector<string>& txids) {
     }
 
     _prefetchThread = std::thread([this, txids]() {
-        for (const auto& txid : txids) {
-            try {
-                Value params;
-                params.append(txid);
-                params.append(true);
-                Value result = _prefetchClient->CallMethod("getrawtransaction", params);
+        try {
+            for (const auto& txid : txids) {
+                try {
+                    Value params;
+                    params.append(txid);
+                    params.append(true);
+                    Value result = _prefetchClient->CallMethod("getrawtransaction", params);
 
-                // Parse into getrawtransaction_t (same as getrawtransaction() private method)
-                getrawtransaction_t ret;
-                ret.hex = result["hex"].asString();
-                ret.txid = result["txid"].asString();
-                ret.hash = result["hash"].asString();
-                ret.size = result["size"].asUInt();
-                ret.vsize = result["vsize"].asUInt();
-                ret.weight = result["weight"].asUInt();
-                ret.version = result["version"].asInt();
-                ret.locktime = result["locktime"].asInt();
-                for (auto it = result["vin"].begin(); it != result["vin"].end(); it++) {
-                    Value val = (*it);
-                    vin_t input;
-                    input.txid = val["txid"].asString();
-                    input.n = val["vout"].asUInt();
-                    input.scriptSig.assm = val["scriptSig"]["asm"].asString();
-                    input.scriptSig.hex = val["scriptSig"]["hex"].asString();
-                    for (auto it3 = val["txinwitness"].begin(); it3 != val["txinwitness"].end(); it3++) {
-                        input.txinwitness.push_back((*it3).asString());
+                    // Parse into getrawtransaction_t (mirrors getrawtransaction() exactly)
+                    getrawtransaction_t ret;
+                    ret.hex = result["hex"].asString();
+                    ret.txid = result["txid"].asString();
+                    ret.hash = result["hash"].asString();
+                    ret.size = result["size"].asUInt();
+                    ret.vsize = result["vsize"].asUInt();
+                    ret.weight = result["weight"].asUInt();
+                    ret.version = result["version"].asInt();
+                    ret.locktime = result["locktime"].asInt();
+                    for (auto it = result["vin"].begin(); it != result["vin"].end(); it++) {
+                        Value val = (*it);
+                        vin_t input;
+                        input.txid = val["txid"].asString();
+                        input.n = val["vout"].asUInt();
+                        input.scriptSig.assm = val["scriptSig"]["asm"].asString();
+                        input.scriptSig.hex = val["scriptSig"]["hex"].asString();
+                        for (auto it3 = val["txinwitness"].begin(); it3 != val["txinwitness"].end(); it3++) {
+                            input.txinwitness.push_back((*it3).asString());
+                        }
+                        ret.vin.push_back(input);
                     }
-                    ret.vin.push_back(input);
-                }
-                for (auto it = result["vout"].begin(); it != result["vout"].end(); it++) {
-                    Value val = (*it);
-                    vout_t output;
-                    output.value = val["value"].asDouble();
-                    output.valueS = (uint64_t)round(val["value"].asDouble() * 100000000);
-                    output.n = val["n"].asUInt();
-                    output.scriptPubKey.assm = val["scriptPubKey"]["asm"].asString();
-                    output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
-                    output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
-                    output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
-                    for (auto it2 = val["scriptPubKey"]["addresses"].begin();
-                         it2 != val["scriptPubKey"]["addresses"].end(); it2++) {
-                        output.scriptPubKey.addresses.push_back((*it2).asString());
+                    for (auto it = result["vout"].begin(); it != result["vout"].end(); it++) {
+                        Value val = (*it);
+                        vout_t output;
+                        output.value = val["value"].asDouble();
+                        output.valueS = (uint64_t)round(val["value"].asDouble() * 100000000);
+                        output.n = val["n"].asUInt();
+                        output.scriptPubKey.assm = val["scriptPubKey"]["asm"].asString();
+                        output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
+                        output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
+                        output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
+                        for (auto it2 = val["scriptPubKey"]["addresses"].begin();
+                             it2 != val["scriptPubKey"]["addresses"].end(); it2++) {
+                            output.scriptPubKey.addresses.push_back((*it2).asString());
+                        }
+                        auto& addr = val["scriptPubKey"]["address"];
+                        if (addr) {
+                            std::string addrStr = addr.asString();
+                            if (std::find(output.scriptPubKey.addresses.begin(), output.scriptPubKey.addresses.end(), addrStr) == output.scriptPubKey.addresses.end()) {
+                                output.scriptPubKey.addresses.push_back(addrStr);
+                            }
+                        }
+                        ret.vout.push_back(output);
                     }
-                    ret.vout.push_back(output);
-                }
-                ret.blockhash = result["blockhash"].asString();
-                ret.time = result["time"].asUInt();
-                ret.blocktime = result["blocktime"].asUInt();
+                    ret.blockhash = result["blockhash"].asString();
+                    ret.confirmations = result["confirmations"].asUInt();
+                    ret.time = result["time"].asUInt();
+                    ret.blocktime = result["blocktime"].asUInt();
 
-                std::lock_guard<std::mutex> lock(_txCacheMutex);
-                _txCache[txid] = std::move(ret);
-            } catch (...) {
-                // If prefetch fails, getRawTransaction will fetch on demand
+                    std::lock_guard<std::mutex> lock(_txCacheMutex);
+                    _txCache[txid] = std::move(ret);
+                } catch (...) {
+                    // Single TX prefetch failure is OK — getRawTransaction will fetch on demand
+                }
             }
+        } catch (...) {
+            // Thread-level failure — silently give up on prefetch
         }
     });
 }

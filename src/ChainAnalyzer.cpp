@@ -434,6 +434,14 @@ void ChainAnalyzer::phaseSync() {
             dgb->prefetchBlockTxs(blockData.tx);
         }
     }
+
+    //commit any remaining open batch transaction
+    if (blocksInTransaction > 0) {
+        db->endTransaction();
+    }
+
+    //wait for any in-flight prefetch
+    dgb->waitForPrefetch();
 }
 
 void ChainAnalyzer::phasePrune() {
