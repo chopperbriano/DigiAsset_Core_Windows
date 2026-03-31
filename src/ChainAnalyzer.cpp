@@ -397,10 +397,15 @@ void ChainAnalyzer::phaseSync() {
 
         //get what would be next block based on the block we just processed
         _nextHash = blockData.nextblockhash;
-
-        //get what actually is the next block(we check both ways because if they don't match there was a rollback)
         _height++;
-        hash = dgb->getBlockHash(_height);
+
+        //during bulk sync (>10 blocks behind), trust nextblockhash to skip a getBlockHash RPC call
+        //only verify via getBlockHash every 100 blocks or when close to chain tip
+        if (_state < -10 && (_height % 100 != 0)) {
+            hash = _nextHash;
+        } else {
+            hash = dgb->getBlockHash(_height);
+        }
         blockData = dgb->getBlock(hash);
 
         //save the next block to be processed to the database
