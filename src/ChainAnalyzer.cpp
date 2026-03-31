@@ -289,8 +289,6 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTime;
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
-    int blocksInTransaction = 0;
-    const int BATCH_SIZE = 50;
     bool pipelineActive = false;
     stringstream ss;
 
@@ -327,19 +325,13 @@ void ChainAnalyzer::phaseSync() {
         }
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
-        //process each tx in block (batched in SQLite transaction)
-        if (blocksInTransaction == 0) {
-            db->startTransaction();
-        }
+        //process each tx in block
+        db->startTransaction();
         if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) {
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
         }
-        blocksInTransaction++;
-        if ((_state >= -10) || (blocksInTransaction >= BATCH_SIZE)) {
-            db->endTransaction();
-            blocksInTransaction = 0;
-        }
+        db->endTransaction();
 
         //show run time stats
         totalProcessed++;
@@ -374,7 +366,6 @@ void ChainAnalyzer::phaseSync() {
 
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
-            if (blocksInTransaction > 0) { db->endTransaction(); blocksInTransaction = 0; }
             if (pipelineActive) { dgb->stopPrefetch(); pipelineActive = false; }
             db->executePerformanceIndex(_state);
             _state = SYNCED;
@@ -414,7 +405,6 @@ void ChainAnalyzer::phaseSync() {
     }
 
     //cleanup
-    if (blocksInTransaction > 0) db->endTransaction();
     if (pipelineActive) dgb->stopPrefetch();
 }
 
