@@ -33,10 +33,14 @@ else()
 endif()
 
 # Set version number
+# Upstream version (keep in sync with DigiAsset-Core/DigiAsset_Core)
 SET(MAJOR_VERSION 0)
 SET(MINOR_VERSION 3)
 SET(PATCH_VERSION 0)
 SET(SO_VERSION    0)
+
+# Windows port build number (increment for each Windows-specific release)
+SET(WIN_BUILD 1)
 
 # Add source directory
 include_directories(src)

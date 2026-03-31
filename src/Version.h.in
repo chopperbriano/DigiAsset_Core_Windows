@@ -3,19 +3,39 @@
 
 #include <string>
 
+// Upstream version (from DigiAsset-Core/DigiAsset_Core)
 #define MAJOR_VERSION @MAJOR_VERSION@
 #define MINOR_VERSION @MINOR_VERSION@
 #define PATCH_VERSION @PATCH_VERSION@
 #define SO_VERSION @SO_VERSION@
 
+// Windows port build number
+#define WIN_BUILD @WIN_BUILD@
+
 // Helper macros for stringification
 #define STRINGIFY(x) #x
 #define TO_STRING(x) STRINGIFY(x)
 
-// Concatenate version numbers into a string
-#define VERSION_STRING (TO_STRING(MAJOR_VERSION) "." TO_STRING(MINOR_VERSION) "." TO_STRING(PATCH_VERSION) "." TO_STRING(SO_VERSION))
+// Full version string: "0.3.0-win.1"
+#define VERSION_STRING (TO_STRING(MAJOR_VERSION) "." TO_STRING(MINOR_VERSION) "." TO_STRING(PATCH_VERSION) "-win." TO_STRING(WIN_BUILD))
+
+// Upstream-only version string: "0.3.0"
+#define UPSTREAM_VERSION_STRING (TO_STRING(MAJOR_VERSION) "." TO_STRING(MINOR_VERSION) "." TO_STRING(PATCH_VERSION))
+
+// Product name
+#define PRODUCT_NAME "DigiAsset Core for Windows"
 
 // Function to return version string
 inline const std::string getVersionString() {
     return std::string(VERSION_STRING);
+}
+
+// Function to return full product + version string
+inline const std::string getProductVersionString() {
+    return std::string(PRODUCT_NAME) + " v" + VERSION_STRING;
+}
+
+// Function to return upstream version
+inline const std::string getUpstreamVersionString() {
+    return std::string(UPSTREAM_VERSION_STRING);
 }

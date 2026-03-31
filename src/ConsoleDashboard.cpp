@@ -64,7 +64,7 @@ void ConsoleDashboard::start() {
     if (_running) return;
     _running = true;
 #ifdef _WIN32
-    SetConsoleTitleA("DigiAsset Core");
+    SetConsoleTitleA(PRODUCT_NAME);
 #endif
     // Clear the screen and render immediately so the user sees the dashboard
     std::cout << ESC "2J" << CURSOR_HOME << std::flush;
@@ -212,7 +212,7 @@ void ConsoleDashboard::render() {
     out << HIDE_CURSOR << CURSOR_HOME;
 
     // Row 1-2: Header
-    std::string title = "DigiAsset Core v" + getVersionString();
+    std::string title = getProductVersionString() + "  (based on upstream " + getUpstreamVersionString() + ")";
     out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE << centerText(title, w) << RESET << "\n";
     out << ERASE_LINE << std::string(w, '-') << "\n";
 

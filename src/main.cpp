@@ -72,8 +72,8 @@ int main() {
         config.setString("psp1payout", payout);
 
         //check if user wants to store minimal information or everything
-        cout << "Unpruned DigiAsset Core requires 100GB of storage.  Pruned DigiAsset Core requires 2 GB of storage.  Unless running a service like an explorer or wallet back end Pruned Mode is recommended.\n";
-        cout << "Would you like DigiAsset Core to run in pruning mode(Y/N)? ";
+        cout << "Unpruned mode requires 100GB of storage.  Pruned mode requires 2 GB of storage.  Unless running a service like an explorer or wallet back end Pruned Mode is recommended.\n";
+        cout << "Would you like to run in pruning mode(Y/N)? ";
         bool pruneMode = utils::getAnswerBool();
         bool bootstrap = false;
         if (pruneMode) {
@@ -119,7 +119,7 @@ int main() {
     /*
      * Print starting message
      */
-    log->addMessage("Starting DigiAsset Core " + getVersionString());
+    log->addMessage("Starting " + getProductVersionString());
 
     /*
      * Predownload database files if config files allow and database missing
