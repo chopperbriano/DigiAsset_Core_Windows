@@ -736,6 +736,12 @@ void Database::disableWriteVerification() {
     char* zErrMsg = nullptr;
     sqlite3_exec(_db, "PRAGMA synchronous = OFF", nullptr, nullptr, &zErrMsg);
     sqlite3_exec(_db, "PRAGMA journal_mode = MEMORY", nullptr, nullptr, &zErrMsg);
+    // Large page cache (256MB) keeps hot data in RAM — huge speedup for UTXO lookups
+    sqlite3_exec(_db, "PRAGMA cache_size = -262144", nullptr, nullptr, &zErrMsg);
+    // Store temp tables/indexes in memory
+    sqlite3_exec(_db, "PRAGMA temp_store = MEMORY", nullptr, nullptr, &zErrMsg);
+    // Memory-map up to 1GB of the DB file for fast reads bypassing syscalls
+    sqlite3_exec(_db, "PRAGMA mmap_size = 1073741824", nullptr, nullptr, &zErrMsg);
 }
 
 /*
