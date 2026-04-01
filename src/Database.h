@@ -94,7 +94,7 @@ private:
         std::string address;
         uint64_t digibyte;
     };
-    static const size_t MAX_UTXO_CACHE = 500000; // ~50MB at ~100 bytes/entry
+    static const size_t MAX_UTXO_CACHE = 1000000; // ~100MB at ~100 bytes/entry
     std::unordered_map<std::string, NonAssetUtxoInfo> _utxoCacheActive;
     std::unordered_map<std::string, NonAssetUtxoInfo> _utxoCacheOld;
     Statement _stmtCheckFlag;

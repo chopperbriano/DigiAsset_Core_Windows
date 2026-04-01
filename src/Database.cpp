@@ -736,8 +736,12 @@ void Database::disableWriteVerification() {
     char* zErrMsg = nullptr;
     sqlite3_exec(_db, "PRAGMA synchronous = OFF", nullptr, nullptr, &zErrMsg);
     sqlite3_exec(_db, "PRAGMA journal_mode = MEMORY", nullptr, nullptr, &zErrMsg);
-    // Large page cache (256MB) keeps hot data in RAM — huge speedup for UTXO lookups
+    // Exclusive lock — no other process can access DB, eliminates per-query lock overhead
+    sqlite3_exec(_db, "PRAGMA locking_mode = EXCLUSIVE", nullptr, nullptr, &zErrMsg);
+    // 256MB page cache keeps UTXO index pages in RAM
     sqlite3_exec(_db, "PRAGMA cache_size = -262144", nullptr, nullptr, &zErrMsg);
+    // 8KB pages (better for large tables with variable-size rows like UTXOs)
+    sqlite3_exec(_db, "PRAGMA page_size = 8192", nullptr, nullptr, &zErrMsg);
     // Store temp tables/indexes in memory
     sqlite3_exec(_db, "PRAGMA temp_store = MEMORY", nullptr, nullptr, &zErrMsg);
     // Memory-map up to 1GB of the DB file for fast reads bypassing syscalls

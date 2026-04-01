@@ -360,8 +360,10 @@ void ChainAnalyzer::phaseSync() {
             ss.str(""); ss.clear();
         }
 
-        //clear invalid RPC cached
-        AppMain::GetInstance()->getRpcCache()->newBlockAdded();
+        //clear invalid RPC cached (skip during bulk sync — nobody is querying)
+        if (!bulkSync) {
+            AppMain::GetInstance()->getRpcCache()->newBlockAdded();
+        }
 
         //prune database
         phasePrune();
@@ -470,31 +472,29 @@ void ChainAnalyzer::processTX(const string& txid, unsigned int height) {
     _saveTransactionRunTime += std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
     _saveTransactionRunCount++;
 
-    //get list of addresses that have been changed
-    startTime = std::chrono::steady_clock::now();
-    vector<string> addresses;
-    size_t inputCount = tx.getInputCount();
-    for (size_t i = 0; i < inputCount; i++) {
-        addresses.emplace_back(tx.getInput(i).address);
+    //invalidate rpc caches for changed addresses (skip during bulk sync)
+    if (_state >= -110) {
+        startTime = std::chrono::steady_clock::now();
+        vector<string> addresses;
+        size_t inputCount = tx.getInputCount();
+        for (size_t i = 0; i < inputCount; i++) {
+            addresses.emplace_back(tx.getInput(i).address);
+        }
+        size_t outputCount = tx.getOutputCount();
+        for (size_t i = 0; i < outputCount; i++) {
+            addresses.emplace_back(tx.getOutput(i).address);
+        }
+        std::sort(addresses.begin(), addresses.end());
+        auto last = std::unique(addresses.begin(), addresses.end());
+        addresses.erase(last, addresses.end());
+        RPC::Cache* cache = AppMain::GetInstance()->getRpcCache();
+        for (auto address: addresses) {
+            cache->addressChanged(address);
+        }
+        duration = std::chrono::steady_clock::now() - startTime;
+        _clearAddressCacheRunTime += std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+        _clearAddressCacheRunCount++;
     }
-    size_t outputCount = tx.getOutputCount();
-    for (size_t i = 0; i < outputCount; i++) {
-        addresses.emplace_back(tx.getOutput(i).address);
-    }
-
-    // Remove duplicates from addresses
-    std::sort(addresses.begin(), addresses.end());               // Sort the vector
-    auto last = std::unique(addresses.begin(), addresses.end()); // Remove consecutive duplicates
-    addresses.erase(last, addresses.end());                      // Erase the non-unique elements
-
-    //invalidate rpc caches based on addresses that have changed
-    RPC::Cache* cache = AppMain::GetInstance()->getRpcCache();
-    for (auto address: addresses) {
-        cache->addressChanged(address);
-    }
-    duration = std::chrono::steady_clock::now() - startTime;
-    _clearAddressCacheRunTime += std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-    _clearAddressCacheRunCount++;
 }
 
 
