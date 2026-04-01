@@ -1,3 +1,7 @@
+# DigiAsset Core for Windows
+
+> **This is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) originally created by [mctrivia](https://github.com/mctrivia).** All core logic, chain analysis, RPC methods, and DigiAsset protocol implementation are their work. This repository only adds Windows (MSVC) build support, platform-specific stubs, and a console dashboard UI.
+
 ## Table of Contents
 1. [Build on Windows](#build-on-windows)
 2. [Optional Build Targets](#optional-build-targets)
@@ -9,7 +13,7 @@
 
 ## Build on Windows
 
-This fork builds a Windows version with Visual Studio and MSVC in the main branch, with upstream tracking in the 'upstream-master' branch.
+This fork builds a Windows version with Visual Studio and MSVC in the main branch, with upstream tracking in the 'upstream-master' branch. Upstream changes from [DigiAsset-Core/DigiAsset_Core](https://github.com/DigiAsset-Core/DigiAsset_Core) are merged periodically.
 
 Most dependencies (libcurl, OpenSSL, SQLite3, libjsonrpccpp) are replaced by vendored source files or Windows-native stubs (WinHTTP), so no vcpkg or external package manager is needed beyond the jsoncpp and libjson-rpc-cpp subprojects that are already in the repo.
 
@@ -142,12 +146,22 @@ Inbound TCP:12024
 
 ## Documentation
 
-To access documentation run the digiasset_core-web application then go to http://127.0.0.1:8090/
+The web UI is built into `DigiAssetCore.exe`. Once running, open http://localhost:8090/ in your browser.
+
+## Credits
+
+This project is a Windows port of **[DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core)** by **[mctrivia](https://github.com/mctrivia)** and contributors. The core DigiAsset protocol implementation, chain analyzer, RPC interface, database schema, and all blockchain logic are entirely their work.
+
+This fork adds only:
+- Windows/MSVC build system and platform stubs (WinHTTP, OpenSSL stubs, vendored SQLite3)
+- Console dashboard UI (VT100-based TUI)
+- Embedded web server (no separate exe)
+- Sync performance optimizations (prefetch pipeline, UTXO caching)
 
 ## Other Notes
 
 - If submitting pull requests please utilize the .clang-format file to keep things standardized.
-
+- Upstream changes are tracked on the `upstream-master` branch and merged into `master` periodically.
 
 ---
 

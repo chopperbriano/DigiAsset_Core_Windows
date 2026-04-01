@@ -2,8 +2,14 @@
 
 ## Overview
 
-DigiAsset Core for Windows is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core)
-built with MSVC 2022 (x64). The original codebase assumed Linux system
+DigiAsset Core for Windows is a Windows port of
+[DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) by
+[mctrivia](https://github.com/mctrivia) and contributors.
+All core logic, chain analysis, RPC methods, and DigiAsset protocol
+implementation are their work. This port adds only Windows build support,
+platform stubs, a console dashboard, and sync optimizations.
+
+Built with MSVC 2022 (x64). The original codebase assumed Linux system
 libraries (libcurl, OpenSSL, libjsonrpccpp, SQLite3). This port replaces each
 dependency with either a Windows-native implementation or a locally-vendored
 source copy, so the project builds and runs without any external `vcpkg` or
