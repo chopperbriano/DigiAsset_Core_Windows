@@ -48,6 +48,14 @@ Open `jsoncpp\build\jsoncpp.sln` in Visual Studio. Select your build configurati
 
 Open `libjson-rpc-cpp\build\libjson-rpc-cpp.sln`. Use the **same** configuration as above. Build `ALL_BUILD`, then `INSTALL`.
 
+### Install Boost (required for web server)
+
+```cmd
+nuget.exe install boost -Version 1.82.0 -OutputDirectory packages
+```
+
+If you don't have `nuget.exe`, download it from https://www.nuget.org/downloads
+
 ### Build DigiAsset Core
 
 ```cmd
@@ -71,12 +79,6 @@ cmake .. -DBUILD_CLI=ON -DBUILD_WEB=ON -DBUILD_TEST=ON
 | `BUILD_CLI` | `DigiAssetCore-cli.exe` | Command-line RPC client |
 | `BUILD_WEB` | `digiasset_core-web.exe` | Standalone web server (legacy, now built into main exe) |
 | `BUILD_TEST` | `Google_Tests_run.exe` | Google Test suite |
-
-The main exe and Web target require Boost Beast headers. Install Boost 1.82+ via NuGet:
-
-```cmd
-nuget.exe install boost -Version 1.82.0 -OutputDirectory packages
-```
 
 ### Performance Tuning
 
