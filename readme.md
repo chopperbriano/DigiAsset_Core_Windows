@@ -17,8 +17,7 @@ This fork builds a Windows version with Visual Studio and MSVC in the main branc
 
 Most dependencies (libcurl, OpenSSL, SQLite3, libjsonrpccpp) are replaced by vendored source files or Windows-native stubs (WinHTTP), so no vcpkg or external package manager is needed beyond the jsoncpp and libjson-rpc-cpp subprojects that are already in the repo.
 
-Note: If you want to skip the build you can download the DigiAsset for Windows self extracting exe, and extract to c:\digiasset_core_windows or whatever path you chose.
-You will still need to install the IPFS Desktop and DigiByte Core wallet with the changes from below. Run `DigiAssetCore.exe` from a cmd prompt — the web server is now built in (no separate exe needed).
+Note: If you want to skip building from source, download the pre-built binaries from the [Releases](https://github.com/chopperbriano/DigiAsset_Core_Windows/releases) page. You will still need to install IPFS Desktop and DigiByte Core wallet as described below. Run `DigiAssetCore.exe` from a cmd prompt — the web server is built in (no separate exe needed).
 
 ### Prerequisites
 
@@ -28,8 +27,14 @@ You will still need to install the IPFS Desktop and DigiByte Core wallet with th
 ### Clone the Repository
 
 ```cmd
-git clone https://github.com/chopperbriano/DigiAsset_Core_Windows.git
+git clone --recursive https://github.com/chopperbriano/DigiAsset_Core_Windows.git
 cd DigiAsset_Core_Windows
+```
+
+The `--recursive` flag is required to fetch the jsoncpp and libjson-rpc-cpp submodules. If you already cloned without it, run:
+
+```cmd
+git submodule update --init --recursive
 ```
 
 ### Build JsonCpp Library
@@ -62,9 +67,16 @@ If you don't have `nuget.exe`, download it from https://www.nuget.org/downloads
 .\config.bat
 ```
 
-Open the solution file in `build\`, select the same configuration, and build `ALL_BUILD`.
+Open `build\digiasset_core.sln` in Visual Studio, select the **same** configuration (Debug or Release) as the libraries above, and build `ALL_BUILD`.
 
-The `DigiAssetCore.exe` binary will be in `build\src\Release\` (or `Debug\`). This single executable includes both the core sync engine and the web UI server.
+Or build from a Developer Command Prompt:
+
+```cmd
+cd build
+msbuild src\DigiAssetCore.vcxproj /p:Configuration=Release
+```
+
+The `DigiAssetCore.exe` binary will be in `build\src\Release\` (or `Debug\`). This single executable includes the core sync engine, RPC server, and web UI server.
 
 ## Optional Build Targets
 
@@ -119,11 +131,9 @@ addnode=47.75.38.245
 
 ## Install IPFS
 
-Download and isntall the curretn IPFS from https://github.com/ipfs/ipfs-desktop/releases
+Download and install IPFS Desktop from https://github.com/ipfs/ipfs-desktop/releases
 
-this step will list out a lot of data of importance is the line that says "RPC API server listening on" it is usually
-port 5001 note it down if it is not. You can now see IPFS usage at localhost:5001/webui in your web browser(if not
-headless).
+After installation, verify the IPFS API is running. The line "RPC API server listening on" shows the port (usually 5001). You can access the IPFS web UI at http://localhost:5001/webui in your browser.
 
 ## Configure DigiAsset Core
 
