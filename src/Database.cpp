@@ -1276,7 +1276,13 @@ void Database::createUTXO(const AssetUTXO& value, unsigned int heightCreated, bo
     if (value.assets.empty() && getBeenPrunedNonAssetUTXOHistory()) {
         // Cache address + value so getAssetUTXO can return it without an RPC call
         std::string key = value.txid + ":" + std::to_string(value.vout);
-        _nonAssetUtxoCache[key] = {value.address, value.digibyte};
+        _utxoCacheActive[key] = {value.address, value.digibyte};
+        // Rotate generations when active cache gets too large
+        if (_utxoCacheActive.size() > MAX_UTXO_CACHE) {
+            _utxoCacheOld = std::move(_utxoCacheActive);
+            _utxoCacheActive.clear();
+            _utxoCacheActive.reserve(MAX_UTXO_CACHE / 2);
+        }
         return; //non asset utxo and we aren't storing those
     }
     int rc;
@@ -1447,15 +1453,25 @@ AssetUTXO Database::getAssetUTXO(const string& txid, unsigned int vout, unsigned
 
     // Check if this was a known non-asset UTXO that we skipped storing
     std::string cacheKey = txid + ":" + std::to_string(vout);
-    auto cacheIt = _nonAssetUtxoCache.find(cacheKey);
-    if (cacheIt != _nonAssetUtxoCache.end()) {
-        // Known non-asset UTXO — return cached data directly (zero RPC)
+    // Check active cache first, then old generation
+    auto cacheIt = _utxoCacheActive.find(cacheKey);
+    if (cacheIt != _utxoCacheActive.end()) {
         result.txid = txid;
         result.vout = vout;
         result.address = cacheIt->second.address;
         result.digibyte = cacheIt->second.digibyte;
         result.assets.clear();
-        _nonAssetUtxoCache.erase(cacheIt);
+        _utxoCacheActive.erase(cacheIt);
+        return result;
+    }
+    cacheIt = _utxoCacheOld.find(cacheKey);
+    if (cacheIt != _utxoCacheOld.end()) {
+        result.txid = txid;
+        result.vout = vout;
+        result.address = cacheIt->second.address;
+        result.digibyte = cacheIt->second.digibyte;
+        result.assets.clear();
+        _utxoCacheOld.erase(cacheIt);
         return result;
     }
 

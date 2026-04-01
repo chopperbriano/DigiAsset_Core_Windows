@@ -87,12 +87,16 @@ private:
     sqlite3* _db = nullptr;
 
     // In-memory cache of non-asset UTXOs to avoid RPC fallback in getAssetUTXO
-    // Stores address + digibyte amount for UTXOs skipped during createUTXO
+    // Uses two generations: when active map exceeds MAX_UTXO_CACHE, it becomes
+    // the old map and a fresh one is created. Lookups check both.
+    // This bounds memory to ~2x MAX_UTXO_CACHE entries.
     struct NonAssetUtxoInfo {
         std::string address;
         uint64_t digibyte;
     };
-    std::unordered_map<std::string, NonAssetUtxoInfo> _nonAssetUtxoCache;
+    static const size_t MAX_UTXO_CACHE = 500000; // ~50MB at ~100 bytes/entry
+    std::unordered_map<std::string, NonAssetUtxoInfo> _utxoCacheActive;
+    std::unordered_map<std::string, NonAssetUtxoInfo> _utxoCacheOld;
     Statement _stmtCheckFlag;
     Statement _stmtSetFlag;
     Statement _stmtGetBlockHeight;
