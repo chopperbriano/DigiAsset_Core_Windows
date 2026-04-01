@@ -1,13 +1,52 @@
-# Changelog — Windows Port (MSVC/WinHTTP/SQLite3)
+# Changelog — DigiAsset Core for Windows
 
 ## Overview
 
-This work ports DigiAsset Core from Linux/GCC to Windows (MSVC 2022, x64).
-The original codebase assumed Linux system libraries (libcurl, OpenSSL,
-libjsonrpccpp, SQLite3). The Windows port replaces each dependency with either
-a Windows-native implementation or a locally-vendored source copy, so the
-project builds and runs without any external `vcpkg` or system packages beyond
-a standard Visual Studio 2022 installation plus the Boost NuGet package.
+DigiAsset Core for Windows is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core)
+built with MSVC 2022 (x64). The original codebase assumed Linux system
+libraries (libcurl, OpenSSL, libjsonrpccpp, SQLite3). This port replaces each
+dependency with either a Windows-native implementation or a locally-vendored
+source copy, so the project builds and runs without any external `vcpkg` or
+system packages beyond a standard Visual Studio 2022 installation plus the
+Boost NuGet package.
+
+Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
+
+---
+
+## 0.3.0-win.4
+
+### Executable renamed
+- Main executable renamed from `digiasset_core.exe` to `DigiAssetCore.exe`
+- CLI renamed from `digiasset_core-cli.exe` to `DigiAssetCore-cli.exe`
+
+### Integrated web server
+- Web UI server (Boost Beast HTTP) is now built into the main executable —
+  no need to run `digiasset_core-web.exe` separately
+- Serves the web UI on configurable port (`webport`, default 8090)
+- Dashboard displays web server status, clickable link, and external IP
+
+### Console dashboard
+- In-place TUI replaces scrolling log output (VT100 escape sequences)
+- Fixed sections: header with version, services status, sync progress with
+  speed/ETA/progress bar, asset count, and recent log messages
+- Color-coded log messages by severity level
+
+### Sync performance
+- Parallel block prefetch pipeline (4 RPC workers with independent connections)
+- In-memory non-asset UTXO cache eliminates RPC fallback during sync
+- Thread-local CURL handle pooling (WinHTTP connection reuse)
+- SQLite tuning: 256MB page cache, memory-mapped I/O, temp_store=MEMORY
+- Pre-asset blocks (~1000 blocks/sec), asset blocks (~100-200 blocks/sec)
+
+### Other improvements
+- Configurable RPC thread pool size (`rpcthreads`, default 16)
+- IPFS idle polling reduced from 500ms to 100ms
+- `DigiAssetRules::operator==` made const (C++20 compatibility)
+
+---
+
+## 0.3.0-win.1 through win.3 (initial port)
 
 ---
 

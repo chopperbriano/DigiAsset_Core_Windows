@@ -14,7 +14,7 @@ This fork builds a Windows version with Visual Studio and MSVC in the main branc
 Most dependencies (libcurl, OpenSSL, SQLite3, libjsonrpccpp) are replaced by vendored source files or Windows-native stubs (WinHTTP), so no vcpkg or external package manager is needed beyond the jsoncpp and libjson-rpc-cpp subprojects that are already in the repo.
 
 Note: If you want to skip the build you can download the DigiAsset for Windows self extracting exe, and extract to c:\digiasset_core_windows or whatever path you chose.
-You will still need to install the IPFS Desktop and DigiByte Core wallet with the changes from below. You can run DigiAsset_Core.exe from a cmd prompt, as well as DigiAsset_core-web.exe from another cmd prompt.
+You will still need to install the IPFS Desktop and DigiByte Core wallet with the changes from below. Run `DigiAssetCore.exe` from a cmd prompt — the web server is now built in (no separate exe needed).
 
 ### Prerequisites
 
@@ -52,7 +52,7 @@ Open `libjson-rpc-cpp\build\libjson-rpc-cpp.sln`. Use the **same** configuration
 
 Open the solution file in `build\`, select the same configuration, and build `ALL_BUILD`.
 
-The `digiasset_core.exe` binary will be in `build\src\Release\` (or `Debug\`).
+The `DigiAssetCore.exe` binary will be in `build\src\Release\` (or `Debug\`). This single executable includes both the core sync engine and the web UI server.
 
 ## Optional Build Targets
 
@@ -64,11 +64,11 @@ cmake .. -DBUILD_CLI=ON -DBUILD_WEB=ON -DBUILD_TEST=ON
 
 | Target | Binary | Description |
 |---|---|---|
-| `BUILD_CLI` | `digiasset_core-cli.exe` | Command-line RPC client |
-| `BUILD_WEB` | `digiasset_core-web.exe` | Web UI server (Boost Beast) |
+| `BUILD_CLI` | `DigiAssetCore-cli.exe` | Command-line RPC client |
+| `BUILD_WEB` | `digiasset_core-web.exe` | Standalone web server (legacy, now built into main exe) |
 | `BUILD_TEST` | `Google_Tests_run.exe` | Google Test suite |
 
-The Web target requires Boost Beast headers. Install Boost 1.82+ via NuGet:
+The main exe and Web target require Boost Beast headers. Install Boost 1.82+ via NuGet:
 
 ```cmd
 nuget.exe install boost -Version 1.82.0 -OutputDirectory packages
@@ -121,15 +121,15 @@ headless).
 
 ## Configure DigiAsset Core
 
-The first time you run DigiAsset Core it will ask you several questions to set up your config file.  Run DigiAsset_Core.exe from a cmd prompt start in the c:\digiasset_core_windows folder. You will also need to open another cmd prompt and run digiasset_core-web.exe.
+The first time you run DigiAsset Core for Windows it will ask you several questions to set up your config file. Run `DigiAssetCore.exe` from a cmd prompt:
 
-```bash
-digiasset_core.exe
-digiasset_core-web.exe
-
+```cmd
+DigiAssetCore.exe
 ```
 
-This will create config.cfg the wizard creates only the basic config for a full list of config options see example.cfg
+The single executable runs both the sync engine and the web UI server. The console displays a live dashboard with sync progress, service status, asset count, and a link to the web UI (default: http://localhost:8090/).
+
+This will create config.cfg — the wizard creates only the basic config. For a full list of config options see example.cfg.
 
 Make sure DigiAsset Core is running correctly and then press ctrl+c to stop it and continue with instructions.
 
