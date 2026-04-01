@@ -12,6 +12,7 @@
 #include "PermanentStoragePool/PermanentStoragePoolList.h"
 #include "RPC/Cache.h"
 #include "RPC/Server.h"
+#include "WebServer.h"
 #include <mutex>
 class AppMain {
     /**
@@ -43,6 +44,7 @@ private:
     ChainAnalyzer* _analyzer = nullptr;
     RPC::Cache* _rpcCache = nullptr;
     RPC::Server* _rpcServer = nullptr;
+    WebServer* _webServer = nullptr;
 
 public:
     void setDatabase(Database* db);
@@ -67,12 +69,16 @@ public:
     void setRpcServer(RPC::Server* server);
     RPC::Server* getRpcServer();
 
+    void setWebServer(WebServer* ws);
+    WebServer* getWebServer();
+
     // Null-safe getters (return nullptr instead of throwing)
     Database* getDatabaseIfSet() { return _db; }
     IPFS* getIPFSIfSet() { return _ipfs; }
     DigiByteCore* getDigiByteCoreIfSet() { return _dgb; }
     ChainAnalyzer* getChainAnalyzerIfSet() { return _analyzer; }
     RPC::Server* getRpcServerIfSet() { return _rpcServer; }
+    WebServer* getWebServerIfSet() { return _webServer; }
 
     void reset();
 };

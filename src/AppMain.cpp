@@ -123,3 +123,15 @@ RPC::Server* AppMain::getRpcServer() {
     }
     return _rpcServer;
 }
+
+void AppMain::setWebServer(WebServer* ws) {
+    _webServer = ws;
+}
+WebServer* AppMain::getWebServer() {
+    if (_webServer == nullptr) {
+        Log* log = Log::GetInstance();
+        log->addMessage("Tried to get Web Server without first loading", Log::CRITICAL);
+        throw runtime_error("Not available");
+    }
+    return _webServer;
+}

@@ -215,6 +215,14 @@ void ConsoleDashboard::render() {
     if (rpcOnline) {
         rpcPort = rpcServer->getPort();
     }
+    WebServer* webServer = app->getWebServerIfSet();
+    bool webOnline = (webServer != nullptr && webServer->isRunning());
+    unsigned short webPort = 0;
+    std::string externalIP;
+    if (webServer) {
+        webPort = webServer->getPort();
+        externalIP = webServer->getExternalIP();
+    }
 
     // ---- Build output -------------------------------------------------------
     std::ostringstream out;
@@ -229,15 +237,25 @@ void ConsoleDashboard::render() {
     out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE << centerText(title, w) << RESET << "\n"; totalRows++;
     out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
 
-    // Row 3-4: Services (two lines to avoid wrapping)
+    // Row 3-5: Services
     out << ERASE_LINE
         << "  DigiByte Core: " << (dgbOnline ? (std::string(FG_GREEN) + "Online") : (std::string(FG_RED) + "Offline")) << RESET
         << "    Database: " << (dbOnline ? (std::string(FG_GREEN) + "Ready") : (std::string(FG_RED) + "N/A")) << RESET
+        << "    IPFS: " << (ipfsOnline ? (std::string(FG_GREEN) + "Connected") : (std::string(FG_YELLOW) + "N/A")) << RESET
         << "\n"; totalRows++;
     out << ERASE_LINE
-        << "  IPFS: " << (ipfsOnline ? (std::string(FG_GREEN) + "Connected") : (std::string(FG_YELLOW) + "N/A")) << RESET
-        << "           RPC: " << (rpcOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(rpcPort)) : (std::string(FG_RED) + "Off")) << RESET
+        << "  RPC Server:    " << (rpcOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(rpcPort)) : (std::string(FG_RED) + "Off")) << RESET
+        << "    Web Server: " << (webOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(webPort)) : (std::string(FG_RED) + "Off")) << RESET
         << "\n"; totalRows++;
+    // Web UI link + External IP
+    if (webOnline) {
+        out << ERASE_LINE
+            << "  Web UI: " << FG_CYAN << "http://localhost:" << std::to_string(webPort) << "/" << RESET;
+        if (!externalIP.empty() && externalIP != "unknown") {
+            out << "    External IP: " << FG_BRIGHT_WHITE << externalIP << RESET;
+        }
+        out << "\n"; totalRows++;
+    }
 
     // Row 5: separator
     out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;

@@ -8,6 +8,7 @@
 #include "Log.h"
 #include "RPC/Server.h"
 #include "Version.h"
+#include "WebServer.h"
 #include "utils.h"
 #include <iostream>
 #include <memory>
@@ -239,6 +240,18 @@ int main() {
         rpcThread.detach();
     } catch (const std::exception& e) {
         log->addMessage(std::string("RPC server failed: ") + e.what(), Log::CRITICAL);
+    }
+
+    /**
+     * Start Web Server
+     */
+    WebServer webServer("config.cfg");
+    try {
+        log->addMessage("Starting Web Server");
+        main->setWebServer(&webServer);
+        webServer.start();
+    } catch (const std::exception& e) {
+        log->addMessage(std::string("Web server failed: ") + e.what(), Log::CRITICAL);
     }
 
     /**

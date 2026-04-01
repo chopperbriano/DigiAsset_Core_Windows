@@ -105,6 +105,7 @@ set(HEADER_FILES
         AppMain.h
         CurlHandler.h
         ConsoleDashboard.h
+        WebServer.h
         Version.h
         OldStream.h
         UniqueTaskQueue.h
@@ -147,6 +148,7 @@ set(SOURCE_FILES
         AppMain.cpp
         CurlHandler.cpp
         ConsoleDashboard.cpp
+        WebServer.cpp
         OldStream.cpp
         UniqueTaskQueue.cpp
         Database_Statement.cpp
@@ -165,6 +167,12 @@ set(SOURCE_FILES
         )
 
 add_executable(digiasset_core main.cpp ${SOURCE_FILES} ${HEADER_FILES} ${RPC_METHODS_FILES})
+
+# WebServer.cpp needs real Boost Beast headers (not the stub in src/boost/)
+if(WIN32 AND MSVC)
+  set_source_files_properties(WebServer.cpp PROPERTIES
+    COMPILE_FLAGS "/I\"${CMAKE_SOURCE_DIR}/packages/boost.1.82.0/lib/native/include\"")
+endif()
 
 # Link jsoncpp explicitly
 target_link_libraries(digiasset_core PRIVATE "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
