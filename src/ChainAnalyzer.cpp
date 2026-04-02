@@ -326,6 +326,8 @@ void ChainAnalyzer::phaseSync() {
     long totalProcessed = 0;
     bool pipelineActive = false;
     int insertBatch = 0;
+    int txBatch = 0;
+    const int TX_BATCH_SIZE = 10; // commit every 10 blocks during bulk asset sync
     stringstream ss;
 
     blockinfo_t blockData = dgb->getBlock(hash);
@@ -362,20 +364,15 @@ void ChainAnalyzer::phaseSync() {
         }
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
-        //process each tx in block
+        //process each tx in block (batched transaction during bulk sync)
         if (needsAssetProcessing) {
-            auto blockStart = chrono::steady_clock::now();
-            db->startTransaction();
+            if (txBatch == 0) db->startTransaction();
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
-            db->endTransaction();
-            auto blockMs = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - blockStart).count();
-            if (blockMs > 200) {
-                log->addMessage("SLOW block " + to_string(_height) + ": " + to_string(blockMs) + "ms, " +
-                    to_string(blockData.tx.size()) + " txs, parse=" + to_string(_processTransactionRunTime/1000) +
-                    "ms save=" + to_string(_saveTransactionRunTime/1000) + "ms", Log::WARNING);
-                _processTransactionRunTime = 0; _processTransactionRunCount = 0;
-                _saveTransactionRunTime = 0; _saveTransactionRunCount = 0;
+            txBatch++;
+            if (!bulkSync || txBatch >= TX_BATCH_SIZE || stopRequested()) {
+                db->endTransaction();
+                txBatch = 0;
             }
         }
 
@@ -414,6 +411,7 @@ void ChainAnalyzer::phaseSync() {
 
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
+            if (txBatch > 0) { db->endTransaction(); txBatch = 0; }
             if (pipelineActive) { dgb->stopPrefetch(); pipelineActive = false; }
             db->executePerformanceIndex(_state);
             _state = SYNCED;
@@ -468,6 +466,7 @@ void ChainAnalyzer::phaseSync() {
     }
 
     //cleanup
+    if (txBatch > 0) db->endTransaction();
     if (insertBatch > 0) db->endTransaction();
     if (pipelineActive) dgb->stopPrefetch();
 }

@@ -1306,11 +1306,10 @@ void Database::createUTXO(const AssetUTXO& value, unsigned int heightCreated, bo
         throw exceptionFailedInsert();
     }
 
-    //add any assets
+    //add any assets (reuse blobTXID from above — same txid)
     for (size_t aout = 0; aout < value.assets.size(); aout++) {
         createUTXO.reset();
         createUTXO.bindText(1, value.address);
-        blobTXID = Blob(value.txid);
         createUTXO.bindBlob(2, blobTXID);
         createUTXO.bindInt(3, value.vout);
         createUTXO.bindInt(4, aout);
