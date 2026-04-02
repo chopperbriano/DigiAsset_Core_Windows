@@ -284,9 +284,11 @@ int main() {
     analyzer.stop();
     log->addMessage("Chain analyzer stopped");
     webServer.stop();
-    log->addMessage("Shutdown complete — exiting");
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // let user see the message
+    log->addMessage("Shutdown complete");
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     dashboard.stop();
+    std::cout << "\033[?25h" << std::endl; // restore cursor
+    std::exit(0); // force exit — detached RPC thread won't hold process
 
     return 0;
 

@@ -119,13 +119,19 @@ void ConsoleDashboard::processInput() {
                     log->addMessage(_showDebug ? "Log level: DEBUG" : "Log level: INFO");
                 }
                 break;
+            case 'e':
+            case 'E':
+                // Immediate exit
+                _quitRequested = true;
+                if (_quitCallback) _quitCallback();
+                break;
             case 'h':
             case 'H':
             case '?':
                 // Show help in log
                 {
                     Log* log = Log::GetInstance();
-                    log->addMessage("Keyboard commands: Q=Quit  L=Toggle log level  H=Help");
+                    log->addMessage("Keyboard commands: Q=Graceful quit  E=Exit now  L=Toggle log level  H=Help");
                 }
                 break;
             default:
@@ -388,7 +394,7 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar (cursor is already on the right line after the \n above)
-    out << ERASE_LINE << DIM << " [Q] Quit   [L] Toggle Log Level   [H] Help" << RESET;
+    out << ERASE_LINE << DIM << " [Q] Quit   [E] Exit   [L] Log Level   [H] Help" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
