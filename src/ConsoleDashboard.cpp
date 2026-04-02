@@ -4,6 +4,7 @@
 
 #include "ConsoleDashboard.h"
 #include "AppMain.h"
+#include "Log.h"
 #include "Version.h"
 #include <iostream>
 #include <sstream>
@@ -107,6 +108,25 @@ void ConsoleDashboard::processInput() {
             case 'Q':
                 _quitRequested = true;
                 if (_quitCallback) _quitCallback();
+                break;
+            case 'l':
+            case 'L':
+                // Toggle log level between INFO and DEBUG
+                _showDebug = !_showDebug;
+                {
+                    Log* log = Log::GetInstance();
+                    log->setMinLevelToScreen(_showDebug ? Log::DEBUG : Log::INFO);
+                    log->addMessage(_showDebug ? "Log level: DEBUG" : "Log level: INFO");
+                }
+                break;
+            case 'h':
+            case 'H':
+            case '?':
+                // Show help in log
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("Keyboard commands: Q=Quit  L=Toggle log level  H=Help");
+                }
                 break;
             default:
                 break;
@@ -369,7 +389,7 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar at bottom
-    out << "\n" << ERASE_LINE << DIM << " [Q] Quit" << RESET;
+    out << "\n" << ERASE_LINE << DIM << " [Q] Quit   [L] Toggle Log Level   [H] Help" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;

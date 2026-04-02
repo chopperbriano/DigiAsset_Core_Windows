@@ -279,12 +279,14 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    // Graceful shutdown
-    log->addMessage("Shutting down...");
+    // Graceful shutdown — dashboard keeps rendering so user sees progress
+    log->addMessage("Shutting down... waiting for current block to finish");
     analyzer.stop();
+    log->addMessage("Chain analyzer stopped");
     webServer.stop();
+    log->addMessage("Shutdown complete — exiting");
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // let user see the message
     dashboard.stop();
-    log->addMessage("Shutdown complete");
 
     return 0;
 

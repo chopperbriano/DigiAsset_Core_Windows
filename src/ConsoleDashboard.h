@@ -72,6 +72,7 @@ private:
     // Keyboard input
     std::atomic<bool>       _quitRequested{false};
     std::function<void()>   _quitCallback;
+    bool                    _showDebug = false;
 
     // Console dimensions
     int _width = 80;

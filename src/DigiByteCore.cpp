@@ -387,7 +387,7 @@ void DigiByteCore::stopPrefetch() {
 
 bool DigiByteCore::getNextPrefetchedBlock(PrefetchedBlock& out) {
     std::unique_lock<std::mutex> lock(_prefetchMutex);
-    if (!_prefetchCV.wait_for(lock, std::chrono::seconds(5), [this] {
+    if (!_prefetchCV.wait_for(lock, std::chrono::milliseconds(500), [this] {
         return !_prefetchQueue.empty() || _prefetchStop;
     })) {
         return false; // timeout
