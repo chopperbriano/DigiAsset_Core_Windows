@@ -1476,8 +1476,20 @@ AssetUTXO Database::getAssetUTXO(const string& txid, unsigned int vout, unsigned
         return result;
     }
 
+    //UTXO not in DB and not in cache — in pruning mode this means it's a non-asset UTXO
+    //that was never stored. During sync we can return a minimal result (no assets) without
+    //an expensive RPC call. The address is only needed for cache invalidation which is
+    //skipped during bulk sync anyway.
+    if (getBeenPrunedNonAssetUTXOHistory()) {
+        result.txid = txid;
+        result.vout = vout;
+        result.address = "";
+        result.digibyte = 0;
+        result.assets.clear();
+        return result;
+    }
+
     //check if we can/should get from the wallet
-    //if (height<getBeenPrunedUTXOHistory()) means the data we want has been pruned and may contain asset data
     AppMain* main = AppMain::GetInstance();
     if (!main->isDigiByteCoreSet() || (static_cast<int>(height) < getBeenPrunedUTXOHistory())) throw exceptionDataPruned();
 
