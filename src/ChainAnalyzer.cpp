@@ -222,21 +222,43 @@ void ChainAnalyzer::startupFunction() {
 }
 
 void ChainAnalyzer::mainFunction() {
+    Log* log = Log::GetInstance();
+
     // On the first call after startupFunction(), state is already correct.
     // On subsequent calls (after an exception), re-read from DB to recover.
     if (_hasRunOnce) {
+        _errorCount++;
         AppMain* main = AppMain::GetInstance();
         Database* db = main->getDatabase();
         DigiByteCore* dgb = main->getDigiByteCore();
         _height = db->getBlockHeight();
         _nextHash = dgb->getBlockHash(_height);
         db->clearBlocksAboveHeight(_height);
-        Log::GetInstance()->addMessage("Recovered from error at block " + std::to_string(_height), Log::WARNING);
+        log->addMessage("Recovered from error at block " + std::to_string(_height) +
+            " (attempt " + std::to_string(_errorCount) + ")", Log::WARNING);
+
+        // If we keep failing at the same block, wait before retrying
+        if (_errorCount >= 3) {
+            log->addMessage("Repeated failures — waiting 10 seconds before retry", Log::WARNING);
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
+        if (_errorCount >= 10) {
+            log->addMessage("Too many failures at block " + std::to_string(_height + 1) +
+                " — stopping sync. Restart to try again.", Log::CRITICAL);
+            _state = STOPPED;
+            return;
+        }
     }
     _hasRunOnce = true;
 
-    phaseRewind();
-    phaseSync();
+    try {
+        phaseRewind();
+        phaseSync();
+        _errorCount = 0; // reset on success
+    } catch (const std::exception& e) {
+        log->addMessage("Sync error at block " + std::to_string(_height) + ": " + e.what(), Log::CRITICAL);
+        throw; // re-throw so Threaded framework catches it and calls mainFunction again
+    }
 }
 
 void ChainAnalyzer::shutdownFunction() {
