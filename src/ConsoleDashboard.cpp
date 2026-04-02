@@ -119,19 +119,32 @@ void ConsoleDashboard::processInput() {
                     log->addMessage(_showDebug ? "Log level: DEBUG" : "Log level: INFO");
                 }
                 break;
-            case 'e':
-            case 'E':
-                // Immediate exit
-                _quitRequested = true;
-                if (_quitCallback) _quitCallback();
-                break;
             case 'h':
             case 'H':
             case '?':
-                // Show help in log
+                // Show system info in log
                 {
                     Log* log = Log::GetInstance();
-                    log->addMessage("Keyboard commands: Q=Graceful quit  E=Exit now  L=Toggle log level  H=Help");
+                    AppMain* app = AppMain::GetInstance();
+                    log->addMessage("--- System Info ---");
+                    log->addMessage("Version: " + getProductVersionString() + " (upstream " + getUpstreamVersionString() + ")");
+                    Database* hdb = app->getDatabaseIfSet();
+                    if (hdb) {
+                        log->addMessage("Assets on chain: " + formatNumber(hdb->getAssetCountOnChain()));
+                    }
+                    ChainAnalyzer* ha = app->getChainAnalyzerIfSet();
+                    if (ha) {
+                        log->addMessage("Sync height: " + formatNumber(ha->getSyncHeight()));
+                    }
+                    WebServer* hw = app->getWebServerIfSet();
+                    if (hw) {
+                        log->addMessage("Web UI: http://localhost:" + std::to_string(hw->getPort()) + "/");
+                        std::string ip = hw->getExternalIP();
+                        if (!ip.empty() && ip != "unknown") {
+                            log->addMessage("External IP: " + ip);
+                        }
+                    }
+                    log->addMessage("Keys: Q=Quit  L=Toggle log level  H=This info");
                 }
                 break;
             default:
@@ -394,7 +407,7 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar (cursor is already on the right line after the \n above)
-    out << ERASE_LINE << DIM << " [Q] Quit   [E] Exit   [L] Log Level   [H] Help" << RESET;
+    out << ERASE_LINE << DIM << " [Q] Quit   [L] Log Level   [H] Info" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
