@@ -381,15 +381,14 @@ void ConsoleDashboard::render() {
             }
             out << RESET << "\n";
         }
-        // Fill remaining rows with blank lines (no \n on the very last row)
+        // Fill remaining rows with blank lines
         for (int i = printed; i < logRows; ++i) {
-            out << ERASE_LINE;
-            if (i < logRows - 1) out << "\n";
+            out << ERASE_LINE << "\n";
         }
     }
 
-    // Help bar at bottom
-    out << "\n" << ERASE_LINE << DIM << " [Q] Quit   [L] Toggle Log Level   [H] Help" << RESET;
+    // Help bar (cursor is already on the right line after the \n above)
+    out << ERASE_LINE << DIM << " [Q] Quit   [L] Toggle Log Level   [H] Help" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
