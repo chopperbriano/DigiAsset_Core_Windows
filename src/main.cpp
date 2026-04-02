@@ -281,11 +281,6 @@ int main() {
 
     // Graceful shutdown
     log->addMessage("Shutting down...");
-
-    // Stop prefetch pipeline first (can be slow due to in-flight RPC)
-    dgb.stopPrefetch();
-
-    // Stop analyzer (waits for current block to commit)
     analyzer.stop();
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));

@@ -324,7 +324,6 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTime;
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
-    bool pipelineActive = false;
     int insertBatch = 0;
     int txBatch = 0;
     const int TX_BATCH_SIZE = 10; // commit every 10 blocks during bulk asset sync
@@ -343,14 +342,7 @@ void ChainAnalyzer::phaseSync() {
         bool needsAssetProcessing = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
         if (!_showAllBlockSyncTime && (_height % 100 == 0)) fastMode = bulkSync;
 
-        //start prefetch pipeline during bulk sync (skips TX fetch for pre-asset blocks)
-        if (bulkSync && !pipelineActive && !blockData.nextblockhash.empty()) {
-            dgb->startPrefetch(_height + 1);
-            pipelineActive = true;
-        } else if (!bulkSync && pipelineActive) {
-            dgb->stopPrefetch();
-            pipelineActive = false;
-        }
+        // Pipeline disabled for stability — direct RPC only
 
         //show processing block
         if (fastMode) {
@@ -412,7 +404,6 @@ void ChainAnalyzer::phaseSync() {
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
             if (txBatch > 0) { db->endTransaction(); txBatch = 0; }
-            if (pipelineActive) { dgb->stopPrefetch(); pipelineActive = false; }
             db->executePerformanceIndex(_state);
             _state = SYNCED;
             totalProcessed = 0;
@@ -427,30 +418,13 @@ void ChainAnalyzer::phaseSync() {
         _nextHash = blockData.nextblockhash;
         _height++;
 
-        //get next block — from pipeline if active, otherwise via direct RPC
-        if (pipelineActive) {
-            DigiByteCore::PrefetchedBlock pb;
-            // Try twice — first attempt may timeout if pipeline is still starting up
-            bool got = dgb->getNextPrefetchedBlock(pb);
-            if (!got) got = dgb->getNextPrefetchedBlock(pb);
-            if (got) {
-                blockData = std::move(pb.block);
-                dgb->loadTxCache(pb.txData);
-                hash = blockData.hash;
-            } else {
-                //pipeline failed — fall back to direct RPC for this block
-                hash = _nextHash;
-                blockData = dgb->getBlock(hash);
-            }
+        //get next block via direct RPC
+        if (bulkSync && (_height % 100 != 0)) {
+            hash = _nextHash;
         } else {
-            //direct RPC — trust nextblockhash during bulk sync, verify every 100 blocks
-            if (bulkSync && (_height % 100 != 0)) {
-                hash = _nextHash;
-            } else {
-                hash = dgb->getBlockHash(_height);
-            }
-            blockData = dgb->getBlock(hash);
+            hash = dgb->getBlockHash(_height);
         }
+        blockData = dgb->getBlock(hash);
 
         //save block header to database (batched for pre-asset blocks)
         if (!needsAssetProcessing && insertBatch == 0) {
@@ -469,7 +443,6 @@ void ChainAnalyzer::phaseSync() {
     //cleanup
     if (txBatch > 0) db->endTransaction();
     if (insertBatch > 0) db->endTransaction();
-    if (pipelineActive) dgb->stopPrefetch();
 }
 
 void ChainAnalyzer::phasePrune() {
