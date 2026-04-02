@@ -30,10 +30,8 @@ mutex DigiByteCore::_mutex;
 
 DigiByteCore::~DigiByteCore() {
     stopPrefetch();
-    for (auto& w : _prefetchWorkers) {
-        w.client.reset();
-        w.httpClient.reset();
-    }
+    _prefetchWorker.client.reset();
+    _prefetchWorker.httpClient.reset();
     dropConnection();
 }
 
@@ -306,85 +304,48 @@ getrawtransaction_t DigiByteCore::fetchRawTxWith(PrefetchWorker& w, const string
     return ret;
 }
 
-// Each worker thread grabs heights from _nextAssignHeight and deposits results in _slotResults
-void DigiByteCore::workerLoop(size_t idx) {
-    PrefetchWorker& w = _prefetchWorkers[idx];
-    ensureWorkerConnection(w);
-    if (!w.connected) return;
+// Single prefetch thread — fetches blocks sequentially on its own connection.
+// Rock-solid stability: no multi-threading, no shared state, no races.
+void DigiByteCore::dispatchLoop() {
+    ensureWorkerConnection(_prefetchWorker);
+    if (!_prefetchWorker.connected) return;
+
+    unsigned int height = _prefetchHeight;
 
     while (!_prefetchStop) {
-        // Grab next height to fetch
-        unsigned int h = _nextAssignHeight.fetch_add(1);
-
         try {
             Value hashParams;
-            hashParams.append(h);
-            Value hashResult = w.client->CallMethod("getblockhash", hashParams);
-            blockinfo_t block = fetchBlockWith(w, hashResult.asString());
+            hashParams.append(height);
+            Value hashResult = _prefetchWorker.client->CallMethod("getblockhash", hashParams);
+            blockinfo_t block = fetchBlockWith(_prefetchWorker, hashResult.asString());
 
             PrefetchedBlock pb;
             pb.block = block;
 
-            if (h >= 8432316) {
+            if (height >= 8432316) {
                 for (const auto& txid : block.tx) {
                     if (_prefetchStop) break;
                     try {
-                        pb.txData[txid] = fetchRawTxWith(w, txid);
+                        pb.txData[txid] = fetchRawTxWith(_prefetchWorker, txid);
                     } catch (...) {}
                 }
             }
 
-            // Deposit result in slot
+            // Push to queue
             {
-                std::lock_guard<std::mutex> lock(_slotMutex);
-                _slotResults[h] = std::move(pb);
+                std::unique_lock<std::mutex> lock(_prefetchMutex);
+                _prefetchCV.wait(lock, [this] {
+                    return _prefetchQueue.size() < PREFETCH_BUFFER_SIZE || _prefetchStop;
+                });
+                if (_prefetchStop) break;
+                _prefetchQueue.push_back(std::move(pb));
             }
-            _slotCV.notify_one();
-
+            _prefetchCV.notify_one();
+            height++;
         } catch (...) {
             if (_prefetchStop) break;
-            // Deposit empty result so dispatch doesn't hang
-            {
-                std::lock_guard<std::mutex> lock(_slotMutex);
-                _slotResults[h] = PrefetchedBlock();
-            }
-            _slotCV.notify_one();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-    }
-}
-
-// Dispatch thread reads results in order and pushes to consumer queue
-void DigiByteCore::dispatchLoop() {
-    unsigned int nextExpected = _prefetchHeight;
-
-    while (!_prefetchStop) {
-        // Wait for the next expected height to be available
-        PrefetchedBlock pb;
-        {
-            std::unique_lock<std::mutex> lock(_slotMutex);
-            _slotCV.wait(lock, [&] {
-                return _slotResults.count(nextExpected) > 0 || _prefetchStop;
-            });
-            if (_prefetchStop) break;
-            pb = std::move(_slotResults[nextExpected]);
-            _slotResults.erase(nextExpected);
-        }
-        nextExpected++;
-
-        // Skip empty results (failed fetches)
-        if (pb.block.hash.empty()) continue;
-
-        // Push to consumer queue
-        {
-            std::unique_lock<std::mutex> lock(_prefetchMutex);
-            _prefetchCV.wait(lock, [this] {
-                return _prefetchQueue.size() < PREFETCH_BUFFER_SIZE || _prefetchStop;
-            });
-            if (_prefetchStop) break;
-            _prefetchQueue.push_back(std::move(pb));
-        }
-        _prefetchCV.notify_one();
     }
 }
 
@@ -392,23 +353,12 @@ void DigiByteCore::startPrefetch(unsigned int startHeight) {
     stopPrefetch();
     _prefetchStop = false;
     _prefetchHeight = startHeight;
-    _nextAssignHeight = startHeight;
-
-    // Start persistent worker threads
-    for (size_t i = 0; i < NUM_PREFETCH_WORKERS; i++) {
-        _workerThreads[i] = std::thread(&DigiByteCore::workerLoop, this, i);
-    }
-    // Start dispatch thread (reads results in order)
     _dispatchThread = std::thread(&DigiByteCore::dispatchLoop, this);
 }
 
 void DigiByteCore::stopPrefetch() {
     _prefetchStop = true;
     _prefetchCV.notify_all();
-    _slotCV.notify_all();
-    for (size_t i = 0; i < NUM_PREFETCH_WORKERS; i++) {
-        if (_workerThreads[i].joinable()) _workerThreads[i].detach();
-    }
     if (_dispatchThread.joinable()) {
         _dispatchThread.detach();
     }
