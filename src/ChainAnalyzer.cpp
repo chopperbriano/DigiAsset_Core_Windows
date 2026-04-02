@@ -430,14 +430,15 @@ void ChainAnalyzer::phaseSync() {
         //get next block — from pipeline if active, otherwise via direct RPC
         if (pipelineActive) {
             DigiByteCore::PrefetchedBlock pb;
-            if (dgb->getNextPrefetchedBlock(pb)) {
+            // Try twice — first attempt may timeout if pipeline is still starting up
+            bool got = dgb->getNextPrefetchedBlock(pb);
+            if (!got) got = dgb->getNextPrefetchedBlock(pb);
+            if (got) {
                 blockData = std::move(pb.block);
                 dgb->loadTxCache(pb.txData);
                 hash = blockData.hash;
             } else {
-                //pipeline failed — fall back to direct RPC
-                dgb->stopPrefetch();
-                pipelineActive = false;
+                //pipeline failed — fall back to direct RPC for this block
                 hash = _nextHash;
                 blockData = dgb->getBlock(hash);
             }
