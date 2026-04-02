@@ -83,7 +83,15 @@ private:
         std::unique_ptr<jsonrpc::Client> client;
         bool connected = false;
     };
-    PrefetchWorker _dispatchWorker; // single dedicated worker for prefetch
+    static const size_t NUM_PREFETCH_WORKERS = 3;
+    PrefetchWorker _prefetchWorkers[NUM_PREFETCH_WORKERS];
+    std::thread _workerThreads[NUM_PREFETCH_WORKERS];
+    // Per-worker ordered result slots
+    std::mutex _slotMutex;
+    std::condition_variable _slotCV;
+    std::map<unsigned int, PrefetchedBlock> _slotResults; // height -> block
+    std::atomic<unsigned int> _nextAssignHeight{0};
+    void workerLoop(size_t idx);
     void ensureWorkerConnection(PrefetchWorker& w);
     blockinfo_t fetchBlockWith(PrefetchWorker& w, const std::string& hash);
     getrawtransaction_t fetchRawTxWith(PrefetchWorker& w, const std::string& txid);
