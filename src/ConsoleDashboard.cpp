@@ -13,6 +13,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <conio.h>
 #endif
 
 // ---- VT100 escape helpers --------------------------------------------------
@@ -91,9 +92,27 @@ void ConsoleDashboard::addMessage(const std::string& message) {
 
 void ConsoleDashboard::refreshLoop() {
     while (_running) {
+        processInput();
         render();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
+}
+
+void ConsoleDashboard::processInput() {
+#ifdef _WIN32
+    while (_kbhit()) {
+        int ch = _getch();
+        switch (ch) {
+            case 'q':
+            case 'Q':
+                _quitRequested = true;
+                if (_quitCallback) _quitCallback();
+                break;
+            default:
+                break;
+        }
+    }
+#endif
 }
 
 void ConsoleDashboard::updateConsoleSize() {
@@ -307,8 +326,8 @@ void ConsoleDashboard::render() {
     // Row 12: Messages header
     out << BOLD << ERASE_LINE << " Log:" << RESET << "\n"; totalRows++;
 
-    // Remaining rows: log messages — must not exceed window height
-    int logRows = _height - totalRows - 1; // -1 to avoid scrolling on last row
+    // Remaining rows: log messages — reserve 1 row for help bar at bottom
+    int logRows = _height - totalRows - 2; // -1 help bar, -1 to avoid scrolling
     if (logRows < 1) logRows = 1;
 
     {
@@ -348,6 +367,9 @@ void ConsoleDashboard::render() {
             if (i < logRows - 1) out << "\n";
         }
     }
+
+    // Help bar at bottom
+    out << "\n" << ERASE_LINE << DIM << " [Q] Quit" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;

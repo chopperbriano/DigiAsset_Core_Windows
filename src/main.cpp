@@ -274,16 +274,16 @@ int main() {
         log->addMessage(std::string("Chain Analyzer start failed: ") + e.what(), Log::CRITICAL);
     }
 
-    // Wait for shutdown signal (Ctrl+C)
-    while (!g_shutdown) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Wait for shutdown signal (Ctrl+C or Q key)
+    while (!g_shutdown && !dashboard.quitRequested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
     // Graceful shutdown
-    log->addMessage("Shutdown signal received, stopping...");
-    dashboard.stop();
+    log->addMessage("Shutting down...");
     analyzer.stop();
     webServer.stop();
+    dashboard.stop();
     log->addMessage("Shutdown complete");
 
     return 0;

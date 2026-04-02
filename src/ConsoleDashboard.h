@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -29,9 +30,18 @@ public:
     // Call once at the very start of main(), before any output.
     static bool enableVT100();
 
+    // Set callback for quit command
+    void setQuitCallback(std::function<void()> cb) { _quitCallback = cb; }
+
+    // Check if quit was requested via keyboard
+    bool quitRequested() const { return _quitRequested; }
+
 private:
     // Refresh loop (runs in its own thread)
     void refreshLoop();
+
+    // Process keyboard input (non-blocking)
+    void processInput();
 
     // Render one frame to the console
     void render();
@@ -58,6 +68,10 @@ private:
     // Cached asset count (refreshed every 5 seconds)
     uint64_t _assetCount = 0;
     std::chrono::steady_clock::time_point _lastAssetCountTime;
+
+    // Keyboard input
+    std::atomic<bool>       _quitRequested{false};
+    std::function<void()>   _quitCallback;
 
     // Console dimensions
     int _width = 80;
