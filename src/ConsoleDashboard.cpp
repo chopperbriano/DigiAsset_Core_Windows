@@ -140,13 +140,13 @@ void ConsoleDashboard::processInput() {
                         break;
                     }
                     uint64_t total = adb->getAssetCountOnChain();
-                    log->addMessage("--- Assets on Chain: " + formatNumber(total) + " ---");
+                    log->addMessage("--- Assets: " + formatNumber(total) + " unique IDs ---");
                     try {
                         auto assets = adb->getLastAssetsIssued(10);
                         if (assets.empty()) {
                             log->addMessage("  No assets found yet");
                         } else {
-                            log->addMessage("  Last 10 assets issued:");
+                            log->addMessage("  Last 10 (index may be higher due to sub-types):");
                             for (const auto& a : assets) {
                                 log->addMessage("  #" + std::to_string(a.assetIndex) +
                                     " | " + a.assetId.substr(0, 20) + "..." +
