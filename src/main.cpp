@@ -279,16 +279,21 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    // Graceful shutdown — dashboard keeps rendering so user sees progress
-    log->addMessage("Shutting down... waiting for current block to finish");
+    // Graceful shutdown
+    log->addMessage("Shutting down...");
+
+    // Stop prefetch pipeline first (can be slow due to in-flight RPC)
+    dgb.stopPrefetch();
+
+    // Stop analyzer (waits for current block to commit)
     analyzer.stop();
-    log->addMessage("Chain analyzer stopped");
-    webServer.stop();
     log->addMessage("Shutdown complete");
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Force exit — detached threads (RPC server, web server) won't hold process
     dashboard.stop();
-    std::cout << "\033[?25h" << std::endl; // restore cursor
-    std::exit(0); // force exit — detached RPC thread won't hold process
+    std::cout << "\033[?25h" << std::flush;
+    std::exit(0);
 
     return 0;
 

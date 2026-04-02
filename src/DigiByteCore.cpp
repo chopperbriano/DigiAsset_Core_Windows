@@ -378,11 +378,13 @@ void DigiByteCore::startPrefetch(unsigned int startHeight) {
 void DigiByteCore::stopPrefetch() {
     _prefetchStop = true;
     _prefetchCV.notify_all();
+    // Detach instead of join — in-flight RPC calls may block for seconds.
+    // The process will exit via std::exit() anyway.
     if (_dispatchThread.joinable()) {
-        _dispatchThread.join();
+        _dispatchThread.detach();
     }
-    std::lock_guard<std::mutex> lock(_prefetchMutex);
-    _prefetchQueue.clear();
+    // Don't clear queue under lock — dispatch thread may still be writing.
+    // Safe because we only call this on shutdown path before std::exit().
 }
 
 bool DigiByteCore::getNextPrefetchedBlock(PrefetchedBlock& out) {
