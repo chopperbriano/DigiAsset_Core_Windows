@@ -222,13 +222,19 @@ void ChainAnalyzer::startupFunction() {
 }
 
 void ChainAnalyzer::mainFunction() {
-    // Re-sync in-memory state from DB in case a previous iteration threw
-    AppMain* main = AppMain::GetInstance();
-    Database* db = main->getDatabase();
-    DigiByteCore* dgb = main->getDigiByteCore();
-    _height = db->getBlockHeight();
-    _nextHash = dgb->getBlockHash(_height);
-    db->clearBlocksAboveHeight(_height);
+    // On the first call after startupFunction(), _firstRun is true and state is already correct.
+    // On subsequent calls (after an exception), re-read from DB to recover.
+    static bool _firstRun = true;
+    if (!_firstRun) {
+        AppMain* main = AppMain::GetInstance();
+        Database* db = main->getDatabase();
+        DigiByteCore* dgb = main->getDigiByteCore();
+        _height = db->getBlockHeight();
+        _nextHash = dgb->getBlockHash(_height);
+        db->clearBlocksAboveHeight(_height);
+        Log::GetInstance()->addMessage("Recovered from error at block " + std::to_string(_height), Log::WARNING);
+    }
+    _firstRun = false;
 
     phaseRewind();
     phaseSync();
@@ -337,10 +343,19 @@ void ChainAnalyzer::phaseSync() {
 
         //process each tx in block
         if (needsAssetProcessing) {
+            auto blockStart = chrono::steady_clock::now();
             db->startTransaction();
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
             db->endTransaction();
+            auto blockMs = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - blockStart).count();
+            if (blockMs > 200) {
+                log->addMessage("SLOW block " + to_string(_height) + ": " + to_string(blockMs) + "ms, " +
+                    to_string(blockData.tx.size()) + " txs, parse=" + to_string(_processTransactionRunTime/1000) +
+                    "ms save=" + to_string(_saveTransactionRunTime/1000) + "ms", Log::WARNING);
+                _processTransactionRunTime = 0; _processTransactionRunCount = 0;
+                _saveTransactionRunTime = 0; _saveTransactionRunCount = 0;
+            }
         }
 
         //show run time stats
