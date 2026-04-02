@@ -10,11 +10,22 @@
 #include "Version.h"
 #include "WebServer.h"
 #include "utils.h"
+#include <csignal>
 #include <iostream>
 #include <memory>
 
+// Global flag for graceful shutdown
+static volatile std::sig_atomic_t g_shutdown = 0;
+static void signalHandler(int signal) {
+    g_shutdown = 1;
+}
+
 
 int main() {
+  // Handle Ctrl+C gracefully
+  std::signal(SIGINT, signalHandler);
+  std::signal(SIGTERM, signalHandler);
+
   try {
     ///When updating bootstrap image change both values.   Reviewers make sure this value is only ever changed by trusted party
     const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM"};
@@ -263,9 +274,19 @@ int main() {
         log->addMessage(std::string("Chain Analyzer start failed: ") + e.what(), Log::CRITICAL);
     }
 
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(100));
+    // Wait for shutdown signal (Ctrl+C)
+    while (!g_shutdown) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
+
+    // Graceful shutdown
+    log->addMessage("Shutdown signal received, stopping...");
+    dashboard.stop();
+    analyzer.stop();
+    webServer.stop();
+    log->addMessage("Shutdown complete");
+
+    return 0;
 
   } catch (const std::exception& e) {
     std::cerr << "\nFATAL: " << e.what() << std::endl;
