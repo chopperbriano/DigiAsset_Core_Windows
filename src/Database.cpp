@@ -239,7 +239,7 @@ void Database::initializeClassValues() {
     _stmtGetBlockHeight.prepare(_db, "SELECT height FROM blocks ORDER BY height DESC LIMIT 1;");
 
     //statement to set block height
-    _stmtInsertBlock.prepare(_db, "INSERT INTO blocks VALUES (?,?,?,?,?);");
+    _stmtInsertBlock.prepare(_db, "INSERT OR REPLACE INTO blocks VALUES (?,?,?,?,?);");
 
     //statement to get block hash
     _stmtGetBlockHash.prepare(_db, "SELECT hash FROM blocks WHERE height=? LIMIT 1;");
@@ -740,8 +740,6 @@ void Database::disableWriteVerification() {
     sqlite3_exec(_db, "PRAGMA locking_mode = EXCLUSIVE", nullptr, nullptr, &zErrMsg);
     // 256MB page cache keeps UTXO index pages in RAM
     sqlite3_exec(_db, "PRAGMA cache_size = -262144", nullptr, nullptr, &zErrMsg);
-    // 8KB pages (better for large tables with variable-size rows like UTXOs)
-    sqlite3_exec(_db, "PRAGMA page_size = 8192", nullptr, nullptr, &zErrMsg);
     // Store temp tables/indexes in memory
     sqlite3_exec(_db, "PRAGMA temp_store = MEMORY", nullptr, nullptr, &zErrMsg);
     // Memory-map up to 1GB of the DB file for fast reads bypassing syscalls
