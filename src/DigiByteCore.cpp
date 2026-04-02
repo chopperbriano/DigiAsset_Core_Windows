@@ -6,7 +6,6 @@
 #include "Config.h"
 #include "Log.h"
 #include <fstream>
-#include <future>
 #include <iostream>
 #include <thread>
 
@@ -31,10 +30,8 @@ mutex DigiByteCore::_mutex;
 
 DigiByteCore::~DigiByteCore() {
     stopPrefetch();
-    for (auto& w : _workers) {
-        w.client.reset();
-        w.httpClient.reset();
-    }
+    _dispatchWorker.client.reset();
+    _dispatchWorker.httpClient.reset();
     dropConnection();
 }
 
@@ -308,59 +305,44 @@ getrawtransaction_t DigiByteCore::fetchRawTxWith(PrefetchWorker& w, const string
 }
 
 void DigiByteCore::dispatchLoop() {
-    for (size_t i = 0; i < NUM_PREFETCH_WORKERS; i++) {
-        ensureWorkerConnection(_workers[i]);
-    }
+    ensureWorkerConnection(_dispatchWorker);
+    if (!_dispatchWorker.connected) return;
 
     unsigned int height = _prefetchHeight;
 
     while (!_prefetchStop) {
         try {
-            // Launch all workers in parallel using std::async
-            std::vector<std::future<PrefetchedBlock>> futures;
-            for (size_t i = 0; i < NUM_PREFETCH_WORKERS && !_prefetchStop; i++) {
-                unsigned int h = height + (unsigned int)i;
-                PrefetchWorker& w = _workers[i];
-                if (!w.connected) continue;
+            // Fetch one block at a time on this dedicated thread
+            Value hashParams;
+            hashParams.append(height);
+            Value hashResult = _dispatchWorker.client->CallMethod("getblockhash", hashParams);
+            blockinfo_t block = fetchBlockWith(_dispatchWorker, hashResult.asString());
 
-                futures.push_back(std::async(std::launch::async, [this, &w, h]() -> PrefetchedBlock {
-                    Value hashParams;
-                    hashParams.append(h);
-                    Value hashResult = w.client->CallMethod("getblockhash", hashParams);
-                    blockinfo_t block = fetchBlockWith(w, hashResult.asString());
+            PrefetchedBlock pb;
+            pb.block = block;
 
-                    PrefetchedBlock pb;
-                    pb.block = block;
-                    if (h >= 8432316) {
-                        for (const auto& txid : block.tx) {
-                            try {
-                                pb.txData[txid] = fetchRawTxWith(w, txid);
-                            } catch (...) {}
-                        }
-                    }
-                    return pb;
-                }));
-            }
-
-            // Collect in order and push to queue
-            for (auto& f : futures) {
-                if (_prefetchStop) break;
-                try {
-                    PrefetchedBlock pb = f.get();
-                    if (pb.block.hash.empty()) continue;
-
-                    std::unique_lock<std::mutex> lock(_prefetchMutex);
-                    _prefetchCV.wait(lock, [this] {
-                        return _prefetchQueue.size() < PREFETCH_BUFFER_SIZE || _prefetchStop;
-                    });
+            // Fetch TX data for asset-era blocks
+            if (height >= 8432316) {
+                for (const auto& txid : block.tx) {
                     if (_prefetchStop) break;
-                    _prefetchQueue.push_back(std::move(pb));
-                    lock.unlock();
-                    _prefetchCV.notify_one();
-                } catch (...) {}
+                    try {
+                        pb.txData[txid] = fetchRawTxWith(_dispatchWorker, txid);
+                    } catch (...) {}
+                }
             }
 
-            height += NUM_PREFETCH_WORKERS;
+            // Push to queue (wait if full)
+            {
+                std::unique_lock<std::mutex> lock(_prefetchMutex);
+                _prefetchCV.wait(lock, [this] {
+                    return _prefetchQueue.size() < PREFETCH_BUFFER_SIZE || _prefetchStop;
+                });
+                if (_prefetchStop) break;
+                _prefetchQueue.push_back(std::move(pb));
+            }
+            _prefetchCV.notify_one();
+
+            height++;
         } catch (...) {
             if (_prefetchStop) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

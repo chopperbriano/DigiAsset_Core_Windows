@@ -78,13 +78,12 @@ private:
     std::thread _dispatchThread;
     void dispatchLoop();
 
-    static const size_t NUM_PREFETCH_WORKERS = 4;
     struct PrefetchWorker {
         std::unique_ptr<jsonrpc::HttpClient> httpClient;
         std::unique_ptr<jsonrpc::Client> client;
         bool connected = false;
     };
-    PrefetchWorker _workers[NUM_PREFETCH_WORKERS];
+    PrefetchWorker _dispatchWorker; // single dedicated worker for prefetch
     void ensureWorkerConnection(PrefetchWorker& w);
     blockinfo_t fetchBlockWith(PrefetchWorker& w, const std::string& hash);
     getrawtransaction_t fetchRawTxWith(PrefetchWorker& w, const std::string& txid);
