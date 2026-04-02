@@ -222,10 +222,9 @@ void ChainAnalyzer::startupFunction() {
 }
 
 void ChainAnalyzer::mainFunction() {
-    // On the first call after startupFunction(), _firstRun is true and state is already correct.
+    // On the first call after startupFunction(), state is already correct.
     // On subsequent calls (after an exception), re-read from DB to recover.
-    static bool _firstRun = true;
-    if (!_firstRun) {
+    if (_hasRunOnce) {
         AppMain* main = AppMain::GetInstance();
         Database* db = main->getDatabase();
         DigiByteCore* dgb = main->getDigiByteCore();
@@ -234,7 +233,7 @@ void ChainAnalyzer::mainFunction() {
         db->clearBlocksAboveHeight(_height);
         Log::GetInstance()->addMessage("Recovered from error at block " + std::to_string(_height), Log::WARNING);
     }
-    _firstRun = false;
+    _hasRunOnce = true;
 
     phaseRewind();
     phaseSync();

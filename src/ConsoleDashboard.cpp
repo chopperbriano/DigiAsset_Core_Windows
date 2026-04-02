@@ -119,6 +119,35 @@ void ConsoleDashboard::processInput() {
                     log->addMessage(_showDebug ? "Log level: DEBUG" : "Log level: INFO");
                 }
                 break;
+            case 'a':
+            case 'A':
+                // List recent assets
+                {
+                    Log* log = Log::GetInstance();
+                    Database* adb = AppMain::GetInstance()->getDatabaseIfSet();
+                    if (!adb) {
+                        log->addMessage("Database not ready");
+                        break;
+                    }
+                    uint64_t total = adb->getAssetCountOnChain();
+                    log->addMessage("--- Assets on Chain: " + formatNumber(total) + " ---");
+                    try {
+                        auto assets = adb->getLastAssetsIssued(10);
+                        if (assets.empty()) {
+                            log->addMessage("  No assets found yet");
+                        } else {
+                            log->addMessage("  Last 10 assets issued:");
+                            for (const auto& a : assets) {
+                                log->addMessage("  #" + std::to_string(a.assetIndex) +
+                                    " | " + a.assetId.substr(0, 20) + "..." +
+                                    " | block " + formatNumber(a.height));
+                            }
+                        }
+                    } catch (...) {
+                        log->addMessage("  Error reading assets");
+                    }
+                }
+                break;
             case 'h':
             case 'H':
             case '?':
@@ -144,7 +173,7 @@ void ConsoleDashboard::processInput() {
                             log->addMessage("External IP: " + ip);
                         }
                     }
-                    log->addMessage("Keys: Q=Quit  L=Toggle log level  H=This info");
+                    log->addMessage("Keys: Q=Quit  A=Assets  L=Log level  H=This info");
                 }
                 break;
             default:
@@ -407,7 +436,7 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar (cursor is already on the right line after the \n above)
-    out << ERASE_LINE << DIM << " [Q] Quit   [L] Log Level   [H] Info" << RESET;
+    out << ERASE_LINE << DIM << " [Q] Quit   [A] Assets   [L] Log Level   [H] Info" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
