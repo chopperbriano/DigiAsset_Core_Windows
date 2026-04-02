@@ -222,6 +222,14 @@ void ChainAnalyzer::startupFunction() {
 }
 
 void ChainAnalyzer::mainFunction() {
+    // Re-sync in-memory state from DB in case a previous iteration threw
+    AppMain* main = AppMain::GetInstance();
+    Database* db = main->getDatabase();
+    DigiByteCore* dgb = main->getDigiByteCore();
+    _height = db->getBlockHeight();
+    _nextHash = dgb->getBlockHash(_height);
+    db->clearBlocksAboveHeight(_height);
+
     phaseRewind();
     phaseSync();
 }
