@@ -4,6 +4,7 @@
 
 #include "ConsoleDashboard.h"
 #include "AppMain.h"
+#include "CurlHandler.h"
 #include "Log.h"
 #include "Version.h"
 #include <iostream>
@@ -119,6 +120,15 @@ void ConsoleDashboard::processInput() {
                     log->addMessage(_showDebug ? "Log level: DEBUG" : "Log level: INFO");
                 }
                 break;
+            case 'p':
+            case 'P':
+                // Check published ports
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("Checking published ports...");
+                    std::thread([this]() { checkPorts(); }).detach();
+                }
+                break;
             case 'a':
             case 'A':
                 // List recent assets
@@ -173,7 +183,7 @@ void ConsoleDashboard::processInput() {
                             log->addMessage("External IP: " + ip);
                         }
                     }
-                    log->addMessage("Keys: Q=Quit  A=Assets  L=Log level  H=This info");
+                    log->addMessage("Keys: Q=Quit  A=Assets  P=Port check  L=Log level  H=This info");
                 }
                 break;
             default:
@@ -436,10 +446,72 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar (cursor is already on the right line after the \n above)
-    out << ERASE_LINE << DIM << " [Q] Quit   [A] Assets   [L] Log Level   [H] Info" << RESET;
+    out << ERASE_LINE << DIM << " [Q] Quit  [A] Assets  [P] Ports  [L] Log Level  [H] Info" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
+}
+
+// ---- Port checking ----------------------------------------------------------
+
+void ConsoleDashboard::checkPorts() {
+    Log* log = Log::GetInstance();
+    AppMain* app = AppMain::GetInstance();
+
+    // Get external IP
+    WebServer* ws = app->getWebServerIfSet();
+    std::string externalIP;
+    if (ws) {
+        externalIP = ws->getExternalIP();
+    }
+    if (externalIP.empty() || externalIP == "unknown") {
+        log->addMessage("Cannot check ports: external IP unknown", Log::WARNING);
+        return;
+    }
+
+    // Collect ports to check
+    struct PortInfo {
+        int port;
+        std::string name;
+    };
+    std::vector<PortInfo> ports;
+    ports.push_back({5001, "IPFS"});
+
+    RPC::Server* rpc = app->getRpcServerIfSet();
+    if (rpc) {
+        ports.push_back({(int)rpc->getPort(), "RPC"});
+    }
+    if (ws) {
+        ports.push_back({(int)ws->getPort(), "Web UI"});
+    }
+    ports.push_back({12024, "DigiByte P2P"});
+
+    log->addMessage("--- Port Check (external IP: " + externalIP + ") ---");
+
+    for (const auto& p : ports) {
+        std::string status;
+        try {
+            // Use portquiz.net or canyouseeme-style check via TCP connect
+            // Simple approach: try to fetch from our own external IP
+            std::string url = "http://" + externalIP + ":" + std::to_string(p.port) + "/";
+            CurlHandler::get(url, 3000);
+            status = "Open (responded)";
+        } catch (const CurlHandler::exceptionTimeout&) {
+            // Timeout could mean firewall is dropping packets
+            status = "Filtered (timeout)";
+        } catch (...) {
+            // Connection refused = port reachable but nothing listening, or blocked
+            status = "Closed/Blocked";
+        }
+
+        std::string color;
+        if (status.find("Open") != std::string::npos) {
+            log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status);
+        } else {
+            log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status, Log::WARNING);
+        }
+    }
+    log->addMessage("Note: 'Closed' may mean firewall/NAT is blocking. Check router port forwarding.");
 }
 
 // ---- Static helpers ---------------------------------------------------------

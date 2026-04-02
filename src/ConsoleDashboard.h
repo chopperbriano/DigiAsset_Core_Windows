@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -73,6 +74,12 @@ private:
     std::atomic<bool>       _quitRequested{false};
     std::function<void()>   _quitCallback;
     bool                    _showDebug = false;
+
+    // Port check results: port -> "Open" / "Closed" / "Checking..." / ""
+    std::mutex _portCheckMutex;
+    std::map<int, std::string> _portStatus;
+    bool _portCheckDone = false;
+    void checkPorts();
 
     // Console dimensions
     int _width = 80;
