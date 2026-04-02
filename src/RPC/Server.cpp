@@ -208,6 +208,7 @@ namespace RPC {
                 log->addMessage("RPC call #" + std::to_string(callNumber) + " method: " + method, Log::DEBUG);
                 response = handleRpcRequest(request);
             } catch (const DigiByteException& e) {
+                if (e.getMessage() == "empty") return; // stub accept — no real connection
                 log->addMessage("Expected exception in RPC call #" + std::to_string(callNumber) + ": " + e.getMessage(), Log::DEBUG);
                 response = createErrorResponse(e.getCode(), e.getMessage(), request);
                 error = true;
@@ -234,13 +235,18 @@ namespace RPC {
 
         //calculate time taken
         auto duration = std::chrono::steady_clock::now() - startTime;
-        log->addMessage("RPC call #" + std::to_string(callNumber) + " finished in " + to_string(std::chrono::duration_cast<std::chrono::microseconds>(duration).count()) + " µs", Log::DEBUG);
+        log->addMessage("RPC call #" + std::to_string(callNumber) + " finished in " + to_string(std::chrono::duration_cast<std::chrono::microseconds>(duration).count()) + " us", Log::DEBUG);
     }
 
     Value Server::parseRequest(tcp::socket& socket) {
         // Read the HTTP request headers
         char data[1024];
         size_t length = socket.read_some(boost::asio::buffer(data, sizeof(data)));
+
+        // Empty read — no client connected (stub accept or closed connection)
+        if (length == 0) {
+            throw DigiByteException(HTTP_BAD_REQUEST, "empty");
+        }
 
         // Parse the HTTP request headers to determine content length
         string requestStr(data, length);
