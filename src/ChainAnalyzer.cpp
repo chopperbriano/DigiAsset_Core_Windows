@@ -329,7 +329,8 @@ void ChainAnalyzer::phaseSync() {
     const int TX_BATCH_SIZE = 10; // commit every 10 blocks during bulk asset sync
     stringstream ss;
 
-    blockinfo_t blockData = dgb->getBlock(hash);
+    bool needsAssetInit = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
+    blockinfo_t blockData = needsAssetInit ? dgb->getBlockVerbose(hash) : dgb->getBlock(hash);
 
     while ((hash == _nextHash) && !stopRequested()) {
         if (totalProcessed == 0) {
@@ -359,8 +360,18 @@ void ChainAnalyzer::phaseSync() {
         //process each tx in block (batched transaction during bulk sync)
         if (needsAssetProcessing) {
             if (txBatch == 0) db->startTransaction();
+            auto txStart = chrono::steady_clock::now();
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
+            auto txMs = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - txStart).count();
+            if (txMs > 500) {
+                log->addMessage("SLOW " + to_string(_height) + ": " + to_string(txMs) + "ms " +
+                    to_string(blockData.tx.size()) + "tx rpc=" +
+                    to_string(_processTransactionRunTime/1000) + "ms db=" +
+                    to_string(_saveTransactionRunTime/1000) + "ms", Log::WARNING);
+                _processTransactionRunTime = 0; _processTransactionRunCount = 0;
+                _saveTransactionRunTime = 0; _saveTransactionRunCount = 0;
+            }
             txBatch++;
             if (!bulkSync || txBatch >= TX_BATCH_SIZE || stopRequested()) {
                 db->endTransaction();
@@ -370,6 +381,15 @@ void ChainAnalyzer::phaseSync() {
 
         //show run time stats
         totalProcessed++;
+        // Log profiling every 500 blocks
+        if (fastMode && (_height % 500 == 499) && _processTransactionRunCount > 0) {
+            log->addMessage("PERF: " + to_string(_processTransactionRunCount) + " txs"
+                + " rpc=" + to_string(_processTransactionRunTime/1000) + "ms"
+                + " db=" + to_string(_saveTransactionRunTime/1000) + "ms"
+                + " tx/blk=" + to_string(_processTransactionRunCount/500));
+            _processTransactionRunTime = 0; _processTransactionRunCount = 0;
+            _saveTransactionRunTime = 0; _saveTransactionRunCount = 0;
+        }
         if (fastMode) {
             if (_height % 100 == 99) {
                 chrono::steady_clock::time_point endTime = chrono::steady_clock::now();
@@ -418,13 +438,17 @@ void ChainAnalyzer::phaseSync() {
         _nextHash = blockData.nextblockhash;
         _height++;
 
-        //get next block via direct RPC
+        //get next block — use verbosity 2 during bulk sync to get all TX data in one call
         if (bulkSync && (_height % 100 != 0)) {
             hash = _nextHash;
         } else {
             hash = dgb->getBlockHash(_height);
         }
-        blockData = dgb->getBlock(hash);
+        if (needsAssetProcessing && bulkSync) {
+            blockData = dgb->getBlockVerbose(hash); // 1 RPC call = block + all TXs
+        } else {
+            blockData = dgb->getBlock(hash);
+        }
 
         //save block header to database (batched for pre-asset blocks)
         if (!needsAssetProcessing && insertBatch == 0) {

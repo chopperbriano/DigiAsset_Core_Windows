@@ -29,9 +29,6 @@ using namespace std;
 mutex DigiByteCore::_mutex;
 
 DigiByteCore::~DigiByteCore() {
-    stopPrefetch();
-    _prefetchWorker.client.reset();
-    _prefetchWorker.httpClient.reset();
     dropConnection();
 }
 
@@ -177,6 +174,99 @@ blockinfo_t DigiByteCore::getBlock(const std::string& hash) {
  * Checks prefetch cache first, falls back to RPC.
  * Possible Errors: See errorCheckAPI
  */
+/**
+ * Gets block with verbosity 2 — returns block data AND full transaction data.
+ * All TX data is loaded into the TX cache so getRawTransaction() serves from memory.
+ * This replaces N+1 RPC calls (1 getblock + N getrawtransaction) with a single call.
+ */
+blockinfo_t DigiByteCore::getBlockVerbose(const string& hash) {
+    return errorCheckAPI([&] {
+        Value params, result;
+        params.append(hash);
+        params.append(2); // verbosity 2 = full TX data
+        result = sendcommand("getblock", params);
+
+        blockinfo_t ret;
+        ret.hash = result["hash"].asString();
+        ret.confirmations = result["confirmations"].asInt();
+        ret.size = result["size"].asInt();
+        ret.strippedsize = result["strippedsize"].asInt();
+        ret.weight = result["weight"].asInt();
+        ret.height = result["height"].asInt();
+        ret.version = result["version"].asInt();
+        ret.algo = result["pow_algo_id"].asUInt();
+        ret.merkleroot = result["merkleroot"].asString();
+        ret.time = result["time"].asUInt();
+        ret.nonce = result["nonce"].asUInt();
+        ret.bits = result["bits"].asString();
+        ret.difficulty = result["difficulty"].asDouble();
+        ret.chainwork = result["chainwork"].asString();
+        ret.previousblockhash = result["previousblockhash"].asString();
+        ret.nextblockhash = result["nextblockhash"].asString();
+
+        // Parse each TX and load into cache
+        std::lock_guard<std::mutex> lock(_txCacheMutex);
+        _txCache.clear();
+        for (auto it = result["tx"].begin(); it != result["tx"].end(); it++) {
+            Value txVal = (*it);
+            std::string txid = txVal["txid"].asString();
+            ret.tx.push_back(txid);
+
+            getrawtransaction_t tx;
+            tx.hex = txVal["hex"].asString();
+            tx.txid = txid;
+            tx.hash = txVal["hash"].asString();
+            tx.size = txVal["size"].asUInt();
+            tx.vsize = txVal["vsize"].asUInt();
+            tx.weight = txVal["weight"].asUInt();
+            tx.version = txVal["version"].asInt();
+            tx.locktime = txVal["locktime"].asInt();
+            for (auto vinIt = txVal["vin"].begin(); vinIt != txVal["vin"].end(); vinIt++) {
+                Value val = (*vinIt);
+                vin_t input;
+                input.txid = val["txid"].asString();
+                input.n = val["vout"].asUInt();
+                input.scriptSig.assm = val["scriptSig"]["asm"].asString();
+                input.scriptSig.hex = val["scriptSig"]["hex"].asString();
+                for (auto wit = val["txinwitness"].begin(); wit != val["txinwitness"].end(); wit++) {
+                    input.txinwitness.push_back((*wit).asString());
+                }
+                tx.vin.push_back(input);
+            }
+            for (auto voutIt = txVal["vout"].begin(); voutIt != txVal["vout"].end(); voutIt++) {
+                Value val = (*voutIt);
+                vout_t output;
+                output.value = val["value"].asDouble();
+                output.valueS = (uint64_t)round(val["value"].asDouble() * 100000000);
+                output.n = val["n"].asUInt();
+                output.scriptPubKey.assm = val["scriptPubKey"]["asm"].asString();
+                output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
+                output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
+                output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
+                for (auto addrIt = val["scriptPubKey"]["addresses"].begin();
+                     addrIt != val["scriptPubKey"]["addresses"].end(); addrIt++) {
+                    output.scriptPubKey.addresses.push_back((*addrIt).asString());
+                }
+                auto& addr = val["scriptPubKey"]["address"];
+                if (addr) {
+                    std::string addrStr = addr.asString();
+                    if (std::find(output.scriptPubKey.addresses.begin(), output.scriptPubKey.addresses.end(), addrStr) == output.scriptPubKey.addresses.end()) {
+                        output.scriptPubKey.addresses.push_back(addrStr);
+                    }
+                }
+                tx.vout.push_back(output);
+            }
+            tx.blockhash = ret.hash;
+            tx.confirmations = ret.confirmations;
+            tx.time = txVal["time"].asUInt();
+            tx.blocktime = txVal["blocktime"].asUInt();
+
+            _txCache[txid] = std::move(tx);
+        }
+        return ret;
+    });
+}
+
 getrawtransaction_t DigiByteCore::getRawTransaction(const string& txid) {
     {
         std::lock_guard<std::mutex> lock(_txCacheMutex);
@@ -195,188 +285,7 @@ getrawtransaction_t DigiByteCore::getRawTransaction(const string& txid) {
 /**
  * Load prefetched TX data into the cache for the current block being processed.
  */
-void DigiByteCore::loadTxCache(map<string, getrawtransaction_t>& txData) {
-    std::lock_guard<std::mutex> lock(_txCacheMutex);
-    _txCache = std::move(txData);
-}
-
-// ---- Block prefetch pipeline ------------------------------------------------
-
-void DigiByteCore::ensureWorkerConnection(PrefetchWorker& w) {
-    if (w.connected) return;
-    try {
-        Config config = Config(_configFileName);
-        std::string url = "http://" + config.getString("rpcuser") + ":" +
-                          config.getString("rpcpassword") + "@" +
-                          config.getString("rpcbind", "127.0.0.1") + ":" +
-                          std::to_string(config.getInteger("rpcport", 14022));
-        w.httpClient.reset(new jsonrpc::HttpClient(url));
-        w.client.reset(new jsonrpc::Client(*w.httpClient, jsonrpc::JSONRPC_CLIENT_V1));
-        w.httpClient->SetTimeout(config.getInteger("rpctimeout", 50000));
-        w.connected = true;
-    } catch (...) {
-        w.connected = false;
-    }
-}
-
-blockinfo_t DigiByteCore::fetchBlockWith(PrefetchWorker& w, const string& hash) {
-    Value params, result;
-    params.append(hash);
-    result = w.client->CallMethod("getblock", params);
-
-    blockinfo_t ret;
-    ret.hash = result["hash"].asString();
-    ret.confirmations = result["confirmations"].asInt();
-    ret.size = result["size"].asInt();
-    ret.strippedsize = result["strippedsize"].asInt();
-    ret.weight = result["weight"].asInt();
-    ret.height = result["height"].asInt();
-    ret.version = result["version"].asInt();
-    ret.algo = result["pow_algo_id"].asUInt();
-    ret.merkleroot = result["merkleroot"].asString();
-    for (auto it = result["tx"].begin(); it != result["tx"].end(); it++) {
-        ret.tx.push_back((*it).asString());
-    }
-    ret.time = result["time"].asUInt();
-    ret.nonce = result["nonce"].asUInt();
-    ret.bits = result["bits"].asString();
-    ret.difficulty = result["difficulty"].asDouble();
-    ret.chainwork = result["chainwork"].asString();
-    ret.previousblockhash = result["previousblockhash"].asString();
-    ret.nextblockhash = result["nextblockhash"].asString();
-    return ret;
-}
-
-getrawtransaction_t DigiByteCore::fetchRawTxWith(PrefetchWorker& w, const string& txid) {
-    Value params, result;
-    params.append(txid);
-    params.append(true);
-    result = w.client->CallMethod("getrawtransaction", params);
-
-    getrawtransaction_t ret;
-    ret.hex = result["hex"].asString();
-    ret.txid = result["txid"].asString();
-    ret.hash = result["hash"].asString();
-    ret.size = result["size"].asUInt();
-    ret.vsize = result["vsize"].asUInt();
-    ret.weight = result["weight"].asUInt();
-    ret.version = result["version"].asInt();
-    ret.locktime = result["locktime"].asInt();
-    for (auto it = result["vin"].begin(); it != result["vin"].end(); it++) {
-        Value val = (*it);
-        vin_t input;
-        input.txid = val["txid"].asString();
-        input.n = val["vout"].asUInt();
-        input.scriptSig.assm = val["scriptSig"]["asm"].asString();
-        input.scriptSig.hex = val["scriptSig"]["hex"].asString();
-        for (auto it3 = val["txinwitness"].begin(); it3 != val["txinwitness"].end(); it3++) {
-            input.txinwitness.push_back((*it3).asString());
-        }
-        ret.vin.push_back(input);
-    }
-    for (auto it = result["vout"].begin(); it != result["vout"].end(); it++) {
-        Value val = (*it);
-        vout_t output;
-        output.value = val["value"].asDouble();
-        output.valueS = (uint64_t)round(val["value"].asDouble() * 100000000);
-        output.n = val["n"].asUInt();
-        output.scriptPubKey.assm = val["scriptPubKey"]["asm"].asString();
-        output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
-        output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
-        output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
-        for (auto it2 = val["scriptPubKey"]["addresses"].begin();
-             it2 != val["scriptPubKey"]["addresses"].end(); it2++) {
-            output.scriptPubKey.addresses.push_back((*it2).asString());
-        }
-        auto& addr = val["scriptPubKey"]["address"];
-        if (addr) {
-            std::string addrStr = addr.asString();
-            if (std::find(output.scriptPubKey.addresses.begin(), output.scriptPubKey.addresses.end(), addrStr) == output.scriptPubKey.addresses.end()) {
-                output.scriptPubKey.addresses.push_back(addrStr);
-            }
-        }
-        ret.vout.push_back(output);
-    }
-    ret.blockhash = result["blockhash"].asString();
-    ret.confirmations = result["confirmations"].asUInt();
-    ret.time = result["time"].asUInt();
-    ret.blocktime = result["blocktime"].asUInt();
-    return ret;
-}
-
-// Single prefetch thread — fetches blocks sequentially on its own connection.
-// Rock-solid stability: no multi-threading, no shared state, no races.
-void DigiByteCore::dispatchLoop() {
-    ensureWorkerConnection(_prefetchWorker);
-    if (!_prefetchWorker.connected) return;
-
-    unsigned int height = _prefetchHeight;
-
-    while (!_prefetchStop) {
-        try {
-            Value hashParams;
-            hashParams.append(height);
-            Value hashResult = _prefetchWorker.client->CallMethod("getblockhash", hashParams);
-            blockinfo_t block = fetchBlockWith(_prefetchWorker, hashResult.asString());
-
-            PrefetchedBlock pb;
-            pb.block = block;
-
-            if (height >= 8432316) {
-                for (const auto& txid : block.tx) {
-                    if (_prefetchStop) break;
-                    try {
-                        pb.txData[txid] = fetchRawTxWith(_prefetchWorker, txid);
-                    } catch (...) {}
-                }
-            }
-
-            // Push to queue
-            {
-                std::unique_lock<std::mutex> lock(_prefetchMutex);
-                _prefetchCV.wait(lock, [this] {
-                    return _prefetchQueue.size() < PREFETCH_BUFFER_SIZE || _prefetchStop;
-                });
-                if (_prefetchStop) break;
-                _prefetchQueue.push_back(std::move(pb));
-            }
-            _prefetchCV.notify_one();
-            height++;
-        } catch (...) {
-            if (_prefetchStop) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
-}
-
-void DigiByteCore::startPrefetch(unsigned int startHeight) {
-    stopPrefetch();
-    _prefetchStop = false;
-    _prefetchHeight = startHeight;
-    _dispatchThread = std::thread(&DigiByteCore::dispatchLoop, this);
-}
-
-void DigiByteCore::stopPrefetch() {
-    _prefetchStop = true;
-    _prefetchCV.notify_all();
-    if (_dispatchThread.joinable()) {
-        _dispatchThread.detach();
-    }
-}
-
-bool DigiByteCore::getNextPrefetchedBlock(PrefetchedBlock& out) {
-    std::unique_lock<std::mutex> lock(_prefetchMutex);
-    if (!_prefetchCV.wait_for(lock, std::chrono::seconds(2), [this] {
-        return !_prefetchQueue.empty() || _prefetchStop;
-    })) {
-        return false; // timeout
-    }
-    if (_prefetchQueue.empty()) return false;
-    out = std::move(_prefetchQueue.front());
-    _prefetchQueue.pop_front();
-    _prefetchCV.notify_one(); // wake producer
-    return true;
-}
+// Prefetch infrastructure removed — getBlockVerbose replaces it
 
 vector<unspenttxout_t> DigiByteCore::listUnspent(int minconf, int maxconf, const vector<string>& addresses) {
     return errorCheckAPI([&] {

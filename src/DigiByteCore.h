@@ -12,9 +12,6 @@
 #include <iomanip>
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
-#include <atomic>
-#include <condition_variable>
-#include <deque>
 #include <map>
 #include <mutex>
 #include <random>
@@ -64,33 +61,6 @@ class DigiByteCore {
     std::mutex _txCacheMutex;
     std::map<std::string, getrawtransaction_t> _txCache;
 
-public:
-    // Block prefetch pipeline
-    struct PrefetchedBlock {
-        blockinfo_t block;
-        std::map<std::string, getrawtransaction_t> txData;
-    };
-private:
-    // Continuous background fetching — single dispatch thread with per-block RPC connections
-    std::mutex _prefetchMutex;
-    std::condition_variable _prefetchCV;
-    std::deque<PrefetchedBlock> _prefetchQueue;
-    std::thread _dispatchThread;
-    void dispatchLoop();
-
-    struct PrefetchWorker {
-        std::unique_ptr<jsonrpc::HttpClient> httpClient;
-        std::unique_ptr<jsonrpc::Client> client;
-        bool connected = false;
-    };
-    PrefetchWorker _prefetchWorker;
-    void ensureWorkerConnection(PrefetchWorker& w);
-    blockinfo_t fetchBlockWith(PrefetchWorker& w, const std::string& hash);
-    getrawtransaction_t fetchRawTxWith(PrefetchWorker& w, const std::string& txid);
-
-    std::atomic<bool> _prefetchStop{false};
-    unsigned int _prefetchHeight = 0;
-    static const size_t PREFETCH_BUFFER_SIZE = 64;
 
 public:
     enum AddressTypes {
@@ -134,12 +104,7 @@ public:
     std::string getBlockHash(uint height);
     blockinfo_t getBlock(const std::string& hash);
     getrawtransaction_t getRawTransaction(const std::string& txid);
-
-    // Block prefetch pipeline — call startPrefetch to begin background fetching
-    void startPrefetch(unsigned int startHeight);
-    void stopPrefetch();
-    bool getNextPrefetchedBlock(PrefetchedBlock& out);
-    void loadTxCache(std::map<std::string, getrawtransaction_t>& txData);
+    blockinfo_t getBlockVerbose(const std::string& hash); // getblock with verbosity 2 — loads TX cache
     std::vector<unspenttxout_t> listUnspent(int minconf = 1, int maxconf = 99999999, const std::vector<std::string>& addresses = {});
     getaddressinfo_t getAddressInfo(const std::string& address);
 
