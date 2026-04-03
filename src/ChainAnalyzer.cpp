@@ -280,17 +280,15 @@ void ChainAnalyzer::shutdownFunction() {
 
 void ChainAnalyzer::phaseRewind() {
     Log* log = Log::GetInstance();
-    log->addMessage("Rewinding Phase Started");
 
     AppMain* main = AppMain::GetInstance();
     Database* db = main->getDatabase();
     DigiByteCore* dgb = main->getDigiByteCore();
 
-    ///should start at what ever number left off at since blocks is set only after finishing
-
-    //check if we need to rewind
+    //check if we need to rewind (blockchain fork detected)
     string hash = dgb->getBlockHash(_height);
     if (hash != _nextHash) {
+        log->addMessage("Fork detected at block " + std::to_string(_height) + " - rewinding", Log::WARNING);
         _state = ChainAnalyzer::REWINDING;
 
         //rewind until correct
