@@ -239,13 +239,17 @@ void ChainAnalyzer::mainFunction() {
 
         // If we keep failing at the same block, wait before retrying
         if (_errorCount >= 3) {
-            log->addMessage("Repeated failures — waiting 10 seconds before retry", Log::WARNING);
+            log->addMessage("Repeated failures - waiting 10 seconds before retry", Log::WARNING);
             std::this_thread::sleep_for(std::chrono::seconds(10));
         }
         if (_errorCount >= 10) {
             log->addMessage("Too many failures at block " + std::to_string(_height + 1) +
-                " — stopping sync. Restart to try again.", Log::CRITICAL);
+                " - stopping sync. Restart to try again.", Log::CRITICAL);
             _state = STOPPED;
+            // Sleep forever until stop is requested — prevents Threaded from retrying
+            while (!stopRequested()) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
             return;
         }
     }

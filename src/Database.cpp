@@ -251,7 +251,7 @@ void Database::initializeClassValues() {
 
 
     //statement to create UTXO
-    _stmtCreateUTXO.prepare(_db, "INSERT INTO utxos (address,txid,vout,aout,assetIndex,amount,heightCreated,issuance)  VALUES (?,?,?,?,?,?,?,?);");
+    _stmtCreateUTXO.prepare(_db, "INSERT OR IGNORE INTO utxos (address,txid,vout,aout,assetIndex,amount,heightCreated,issuance)  VALUES (?,?,?,?,?,?,?,?);");
 
     //statement to spend UTXO
     _stmtSpendUTXO.prepare(_db, "UPDATE utxos SET heightDestroyed=?, spentTXID=? WHERE txid=? AND vout=?;");
