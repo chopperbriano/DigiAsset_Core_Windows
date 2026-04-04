@@ -577,6 +577,8 @@ public:
             : exceptionFailedSQLCommand(error) {}
         explicit exceptionFailedInsert(int line)
             : exceptionFailedSQLCommand("Insert failed at Database.cpp:" + std::to_string(line)) {}
+        exceptionFailedInsert(int line, const std::string& sqlError)
+            : exceptionFailedSQLCommand("Insert failed at Database.cpp:" + std::to_string(line) + " (" + sqlError + ")") {}
     };
 
     class exceptionFailedSelect : public exceptionFailedSQLCommand {
