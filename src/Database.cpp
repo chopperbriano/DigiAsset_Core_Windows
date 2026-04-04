@@ -855,7 +855,7 @@ uint64_t Database::addAsset(const DigiAsset& asset) {
     rc = addAsset.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
     return sqlite3_last_insert_rowid(_db);
 }
@@ -1173,7 +1173,7 @@ void Database::insertBlock(uint height, const std::string& hash, unsigned int ti
     int rc = insertBlock.executeStep();
     if (rc != SQLITE_DONE) { //there should always be one
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert(); //failed to check database
+        throw exceptionFailedInsert(__LINE__); //failed to check database
     }
 }
 
@@ -1303,7 +1303,7 @@ void Database::createUTXO(const AssetUTXO& value, unsigned int heightCreated, bo
     rc = createUTXO.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 
     //add any assets (reuse blobTXID from above — same txid)
@@ -1320,7 +1320,7 @@ void Database::createUTXO(const AssetUTXO& value, unsigned int heightCreated, bo
         rc = createUTXO.executeStep();
         if (rc != SQLITE_DONE) {
             handleSpecialErrors(__LINE__);
-            throw exceptionFailedInsert();
+            throw exceptionFailedInsert(__LINE__);
         }
     }
 }
@@ -1891,7 +1891,7 @@ void Database::addWatchAddress(const string& address) {
     int rc = addWatchAddress.executeStep();
     if (rc != SQLITE_OK) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 
     //add to watch buffer if using buffer
@@ -2107,7 +2107,7 @@ void Database::addVote(const string& address, unsigned int assetIndex, uint64_t 
     int rc = addVote.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
@@ -2442,7 +2442,7 @@ Database::addIPFSJob(const string& cid, const string& sync, const string& extra,
     int rc = insertIPFSJob.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
     return sqlite3_last_insert_rowid(_db);
 }
@@ -2539,7 +2539,7 @@ void Database::setMasterDomainAssetId(const string& assetId) {
     int rc = setDomainMasterAssetId.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
     _masterDomainAssetId.push_back(assetId);
 }
@@ -2589,7 +2589,7 @@ void Database::repinPermanent(unsigned int poolIndex) {
         int rc = repinAssets.executeStep();
         if (rc != SQLITE_DONE) {
             handleSpecialErrors(__LINE__);
-            throw exceptionFailedInsert();
+            throw exceptionFailedInsert(__LINE__);
         }
     }
 
@@ -2599,7 +2599,7 @@ void Database::repinPermanent(unsigned int poolIndex) {
     int rc = repinPermanentSpecific.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
@@ -2634,7 +2634,7 @@ void Database::unpinPermanent(unsigned int poolIndex) {
     int rc = sqlite3_exec(_db, sql.c_str(), Database::defaultCallback, nullptr, nullptr);
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
@@ -2650,7 +2650,7 @@ void Database::addToPermanent(unsigned int poolIndex, const string& cid) {
     int rc = insertPermanent.executeStep();
     if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
@@ -2681,7 +2681,7 @@ void Database::addAssetToPool(unsigned int poolIndex, unsigned int assetIndex) {
     addAssetToPool.bindInt(2, poolIndex);
 
     if (addAssetToPool.executeStep() != SQLITE_DONE) {
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
@@ -3260,7 +3260,7 @@ void Database::addUnknown(const std::string& txid, const Blob& data) {
     stmt.bindBlob(2, data);
     if (stmt.executeStep() != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
@@ -3302,7 +3302,7 @@ void Database::addEncryptedKey(const std::string& address, const Blob& data) {
     stmt.bindBlob(2, data);
     if (stmt.executeStep() != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
-        throw exceptionFailedInsert();
+        throw exceptionFailedInsert(__LINE__);
     }
 }
 
