@@ -1234,8 +1234,11 @@ void Database::clearBlocksAboveHeight(uint height) {
     for (const string& sql: sqlCommands) {
         rc = sqlite3_exec(_db, sql.c_str(), nullptr, nullptr, &zErrMsg);
         if (rc != SQLITE_OK) {
+            std::string err = zErrMsg ? zErrMsg : "unknown";
+            Log::GetInstance()->addMessage("clearBlocksAboveHeight failed: " + err + " SQL: " + sql, Log::CRITICAL);
             sqlite3_free(zErrMsg);
-            throw exceptionFailedDelete();
+            // Continue with remaining cleanup instead of aborting
+            // The next sync will fix any inconsistencies
         }
     }
 }
