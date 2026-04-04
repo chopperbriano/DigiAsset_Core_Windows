@@ -327,8 +327,6 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
     int insertBatch = 0;
-    int txBatch = 0;
-    const int TX_BATCH_SIZE = 10; // commit every 10 blocks during bulk asset sync
     stringstream ss;
 
     bool needsAssetInit = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
@@ -359,26 +357,12 @@ void ChainAnalyzer::phaseSync() {
         }
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
-        //process each tx in block (batched transaction during bulk sync)
+        //process each tx in block
         if (needsAssetProcessing) {
-            if (txBatch == 0) db->startTransaction();
-            auto txStart = chrono::steady_clock::now();
+            db->startTransaction();
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
-            auto txMs = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - txStart).count();
-            if (txMs > 500) {
-                log->addMessage("SLOW " + to_string(_height) + ": " + to_string(txMs) + "ms " +
-                    to_string(blockData.tx.size()) + "tx rpc=" +
-                    to_string(_processTransactionRunTime/1000) + "ms db=" +
-                    to_string(_saveTransactionRunTime/1000) + "ms", Log::WARNING);
-                _processTransactionRunTime = 0; _processTransactionRunCount = 0;
-                _saveTransactionRunTime = 0; _saveTransactionRunCount = 0;
-            }
-            txBatch++;
-            if (!bulkSync || txBatch >= TX_BATCH_SIZE || stopRequested()) {
-                db->endTransaction();
-                txBatch = 0;
-            }
+            db->endTransaction();
         }
 
         //show run time stats
@@ -425,7 +409,6 @@ void ChainAnalyzer::phaseSync() {
 
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
-            if (txBatch > 0) { db->endTransaction(); txBatch = 0; }
             db->executePerformanceIndex(_state);
             _state = SYNCED;
             totalProcessed = 0;
@@ -467,7 +450,6 @@ void ChainAnalyzer::phaseSync() {
     }
 
     //cleanup
-    if (txBatch > 0) db->endTransaction();
     if (insertBatch > 0) db->endTransaction();
 }
 

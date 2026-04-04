@@ -429,11 +429,11 @@ void Database::initializeClassValues() {
     _stmtIsWatchAddress.prepare(_db, "SELECT address FROM exchangeWatch WHERE address=?;");
 
     //statement to add exchange watch address
-    _stmtAddWatchAddress.prepare(_db, "INSERT INTO exchangeWatch VALUES (?);");
+    _stmtAddWatchAddress.prepare(_db, "INSERT OR IGNORE INTO exchangeWatch VALUES (?);");
 
 
     //statement to insert new exchange rate
-    _stmtAddExchangeRate.prepare(_db, "INSERT INTO exchange VALUES (?,?,?,?);");
+    _stmtAddExchangeRate.prepare(_db, "INSERT OR REPLACE INTO exchange VALUES (?,?,?,?);");
 
     //statement to get current exchange rates(all rates)
     _stmtExchangeRatesAtHeight.prepare(_db, "WITH cte AS (\n"
@@ -479,7 +479,7 @@ void Database::initializeClassValues() {
     _stmtGetVoteCount.prepare(_db, "SELECT address,SUM([count]) FROM votes WHERE assetIndex=? GROUP BY address;");
 
     //statement to add asset
-    _stmtAddAsset.prepare(_db, "INSERT INTO assets (assetId, issueAddress, cid, rules, heightCreated, heightUpdated, expires) VALUES (?, ?, ?, ?, ?, ?, ?);");
+    _stmtAddAsset.prepare(_db, "INSERT OR IGNORE INTO assets (assetId, issueAddress, cid, rules, heightCreated, heightUpdated, expires) VALUES (?, ?, ?, ?, ?, ?, ?);");
 
     //statement to update asset(aggregable only)
     _stmtUpdateAsset.prepare(_db, "UPDATE assets SET heightUpdated=?, cid=?, rules=?, expires=? WHERE assetIndex=?");
@@ -512,7 +512,7 @@ void Database::initializeClassValues() {
     _stmtClearNextIPFSJob_a.prepare(_db, "DELETE FROM ipfs WHERE jobIndex=?;");
     _stmtClearNextIPFSJob_b.prepare(_db, "UPDATE ipfs set lock=false WHERE sync=?;");
 
-    _stmtInsertIPFSJob.prepare(_db, "INSERT INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) VALUES (?,false,?,?,?,?,?);");
+    _stmtInsertIPFSJob.prepare(_db, "INSERT OR IGNORE INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) VALUES (?,false,?,?,?,?,?);");
 
     _stmtSetIPFSPauseSync.prepare(_db, "UPDATE ipfs set pause=?, lock=false WHERE sync=?;");
 
@@ -529,12 +529,12 @@ void Database::initializeClassValues() {
     //DigiByte Domain statements
     _stmtGetDomainAssetId.prepare(_db, "SELECT assetId,revoked FROM domains WHERE domain=?");
 
-    _stmtAddDomain.prepare(_db, "INSERT INTO domains VALUES (?,?,false);");
+    _stmtAddDomain.prepare(_db, "INSERT OR IGNORE INTO domains VALUES (?,?,false);");
 
     _stmtRevokeDomain.prepare(_db, "UPDATE domains SET revoked=true WHERE domain=?;");
 
     _stmtSetDomainMasterAssetId_a.prepare(_db, "UPDATE domainsMasters SET active=false WHERE assetId=?;");
-    _stmtSetDomainMasterAssetId_b.prepare(_db, "INSERT INTO domainsMasters VALUES (?,true);");
+    _stmtSetDomainMasterAssetId_b.prepare(_db, "INSERT OR IGNORE INTO domainsMasters VALUES (?,true);");
 
     //IPFS Permanent statements
     _stmtInsertPermanent.prepare(_db, "INSERT OR IGNORE INTO pspFiles (cid,poolIndex) VALUES (?,?)");
@@ -543,9 +543,9 @@ void Database::initializeClassValues() {
 
     _stmtIsInPermanent.prepare(_db, "SELECT 1 FROM pspFiles WHERE cid=?");
 
-    _stmtRepinAssets.prepare(_db, "INSERT INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) SELECT 'pin', 0, cid, '', '', NULL, NULL FROM assets WHERE cid != '';");
+    _stmtRepinAssets.prepare(_db, "INSERT OR IGNORE INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) SELECT 'pin', 0, cid, '', '', NULL, NULL FROM assets WHERE cid != '';");
 
-    _stmtRepinPermanentSpecific.prepare(_db, "INSERT INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) SELECT 'pin', 0, cid, '', '', NULL, NULL FROM pspFiles WHERE \"poolIndex\" = ?;");
+    _stmtRepinPermanentSpecific.prepare(_db, "INSERT OR IGNORE INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) SELECT 'pin', 0, cid, '', '', NULL, NULL FROM pspFiles WHERE \"poolIndex\" = ?;");
 
     _stmtAddAssetToPool.prepare(_db, "INSERT OR IGNORE INTO pspAssets (assetIndex,poolIndex) VALUES (?,?);");
 
@@ -2617,7 +2617,7 @@ void Database::unpinPermanent(unsigned int poolIndex) {
         }
     }
 
-    string sql = "INSERT INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) SELECT 'unpin', 0, cid, '', '', NULL, NULL FROM pspFiles WHERE \"poolIndex\" = ?";
+    string sql = "INSERT OR IGNORE INTO ipfs (sync, lock, cid, extra, callback, pause, maxTime) SELECT 'unpin', 0, cid, '', '', NULL, NULL FROM pspFiles WHERE \"poolIndex\" = ?";
     if (subscribedToAny) {
         sql += " AND \"cid\" NOT IN (SELECT \"cid\" FROM pspFiles WHERE ";
         for (const auto& pool: *pools) {
