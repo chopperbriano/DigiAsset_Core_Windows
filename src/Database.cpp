@@ -1895,7 +1895,7 @@ void Database::addWatchAddress(const string& address) {
     LockedStatement addWatchAddress{_stmtAddWatchAddress};
     addWatchAddress.bindText(1, address);
     int rc = addWatchAddress.executeStep();
-    if (rc != SQLITE_OK) {
+    if (rc != SQLITE_DONE) {
         std::string sqlErr = sqlite3_errmsg(_db);
         handleSpecialErrors(__LINE__);
         throw exceptionFailedInsert(__LINE__, sqlErr);
