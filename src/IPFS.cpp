@@ -111,8 +111,8 @@ void IPFS::mainFunction() {
             ) {
                 _command("pin/add/" + cid, {}, _timeoutPin * 1000);
             }
-        } catch (const exceptionTimeout& e) {
-            //don't worry about failed pin
+        } catch (...) {
+            //don't worry about failed pin (timeout, size check failure, etc.)
         }
     } else if (sync == "unpin") {
         try {
@@ -123,8 +123,8 @@ void IPFS::mainFunction() {
             ) {
                 _command("pin/rm/" + cid, {}, _timeoutPin * 1000);
             }
-        } catch (const exceptionTimeout& e) {
-            //don't worry about failed pin
+        } catch (...) {
+            //don't worry about failed unpin
         }
     } else {
         //figure out what the max time we should try to download the file for is
