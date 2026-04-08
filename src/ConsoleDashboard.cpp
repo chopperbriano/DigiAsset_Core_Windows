@@ -222,6 +222,9 @@ void ConsoleDashboard::render() {
     std::string syncStatusText;
     std::string syncColor = FG_WHITE;
 
+    // Payout balance
+    loadPayoutInfo();
+
     ChainAnalyzer* analyzer = app->getChainAnalyzerIfSet();
     if (analyzer) {
         syncState = analyzer->getSync();
@@ -353,6 +356,15 @@ void ConsoleDashboard::render() {
         }
         out << "\n"; totalRows++;
     }
+    // Payout address + balance
+    if (!_payoutAddress.empty()) {
+        out << ERASE_LINE
+            << "  Payout: " << FG_BRIGHT_WHITE << _payoutAddress << RESET;
+        if (!_payoutBalance.empty()) {
+            out << "    Balance: " << FG_GREEN << _payoutBalance << RESET;
+        }
+        out << "\n"; totalRows++;
+    }
 
     // Row 5: separator
     out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
@@ -450,6 +462,39 @@ void ConsoleDashboard::render() {
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
+}
+
+// ---- Payout balance ---------------------------------------------------------
+
+void ConsoleDashboard::loadPayoutInfo() {
+    if (!_payoutLoaded) {
+        try {
+            Config config("config.cfg");
+            _payoutAddress = config.getString("psp0payout", "");
+        } catch (...) {}
+        _payoutLoaded = true;
+        _lastBalanceTime = std::chrono::steady_clock::now() - std::chrono::seconds(120); // force immediate fetch
+    }
+
+    if (_payoutAddress.empty()) return;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration<double>(now - _lastBalanceTime).count();
+    if (elapsed < 60.0 && !_payoutBalance.empty()) return; // refresh every 60 seconds
+
+    try {
+        std::string response = CurlHandler::get(
+            "http://chainz.cryptoid.info/dgb/api.dws?q=getbalance&a=" + _payoutAddress, 5000);
+        // Response is just the balance number like "21.2103"
+        // Trim whitespace
+        while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' ')) {
+            response.pop_back();
+        }
+        _payoutBalance = response + " DGB";
+        _lastBalanceTime = now;
+    } catch (...) {
+        if (_payoutBalance.empty()) _payoutBalance = "unavailable";
+    }
 }
 
 // ---- Port checking ----------------------------------------------------------

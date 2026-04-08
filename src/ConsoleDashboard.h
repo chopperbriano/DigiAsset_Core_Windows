@@ -66,6 +66,13 @@ private:
     std::chrono::steady_clock::time_point _lastTime;
     double _blocksPerSec = 0.0;
 
+    // Payout address and balance (refreshed every 60 seconds)
+    std::string _payoutAddress;
+    std::string _payoutBalance;
+    std::chrono::steady_clock::time_point _lastBalanceTime;
+    bool _payoutLoaded = false;
+    void loadPayoutInfo();
+
     // Cached asset count (refreshed every 5 seconds)
     uint64_t _assetCount = 0;
     std::chrono::steady_clock::time_point _lastAssetCountTime;
