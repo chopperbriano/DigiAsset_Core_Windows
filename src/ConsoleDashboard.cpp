@@ -361,7 +361,8 @@ void ConsoleDashboard::render() {
         out << ERASE_LINE
             << "  Payout: " << FG_BRIGHT_WHITE << _payoutAddress << RESET;
         if (!_payoutBalance.empty()) {
-            out << "    Balance: " << FG_GREEN << _payoutBalance << RESET;
+            out << "    Balance: " << FG_GREEN << _payoutBalance << RESET
+                << DIM << " (updates every 4h)" << RESET;
         }
         out << "\n"; totalRows++;
     }
@@ -480,7 +481,7 @@ void ConsoleDashboard::loadPayoutInfo() {
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration<double>(now - _lastBalanceTime).count();
-    if (elapsed < 60.0 && !_payoutBalance.empty()) return; // refresh every 60 seconds
+    if (elapsed < 14400.0 && !_payoutBalance.empty()) return; // refresh every 4 hours
 
     try {
         std::string response = CurlHandler::get(
