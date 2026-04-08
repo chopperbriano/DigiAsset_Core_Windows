@@ -486,27 +486,43 @@ void ConsoleDashboard::checkPorts() {
     for (const auto& p : ports) {
         std::string status;
         try {
-            // Use portquiz.net or canyouseeme-style check via TCP connect
-            // Simple approach: try to fetch from our own external IP
-            std::string url = "http://" + externalIP + ":" + std::to_string(p.port) + "/";
-            CurlHandler::get(url, 3000);
-            status = "Open (responded)";
+            // Use portquiz.net — a public service that listens on all ports.
+            // If we can reach it on a given port, our outbound is fine.
+            // For inbound, use canyouseeme.org API style check.
+            std::string url = "https://portchecker.io/api/v1/query/"
+                + externalIP + "/" + std::to_string(p.port);
+            std::string response = CurlHandler::get(url, 5000);
+            if (response.find("\"status\":true") != std::string::npos ||
+                response.find("\"open\":true") != std::string::npos ||
+                response.find("reachable") != std::string::npos) {
+                status = "Open";
+            } else {
+                status = "Closed";
+            }
         } catch (const CurlHandler::exceptionTimeout&) {
-            // Timeout could mean firewall is dropping packets
-            status = "Filtered (timeout)";
+            // Can't reach the checker service
+            status = "Unknown (checker timeout)";
         } catch (...) {
-            // Connection refused = port reachable but nothing listening, or blocked
-            status = "Closed/Blocked";
+            // Fallback: try direct TCP connect to own external IP
+            try {
+                std::string url = "http://" + externalIP + ":" + std::to_string(p.port) + "/";
+                CurlHandler::get(url, 3000);
+                status = "Open";
+            } catch (const CurlHandler::exceptionTimeout&) {
+                status = "Filtered (no hairpin NAT?)";
+            } catch (...) {
+                status = "Uncertain (test from external network to verify)";
+            }
         }
 
-        std::string color;
-        if (status.find("Open") != std::string::npos) {
+        if (status == "Open") {
             log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status);
         } else {
             log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status, Log::WARNING);
         }
     }
-    log->addMessage("Note: 'Closed' may mean firewall/NAT is blocking. Check router port forwarding.");
+    log->addMessage("Tip: If all ports show Filtered/Uncertain, your router may not support hairpin NAT.");
+    log->addMessage("     Test from a different network or use https://canyouseeme.org to verify.");
 }
 
 // ---- Static helpers ---------------------------------------------------------
