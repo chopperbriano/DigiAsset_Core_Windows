@@ -14,11 +14,8 @@
 #include <cmath>
 
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #include <windows.h>
 #include <conio.h>
-#pragma comment(lib, "ws2_32.lib")
 #endif
 
 // ---- VT100 escape helpers --------------------------------------------------
@@ -488,62 +485,27 @@ void ConsoleDashboard::checkPorts() {
 
     for (const auto& p : ports) {
         std::string status;
-
-#ifdef _WIN32
-        // Raw TCP connect test — no HTTP, just check if the port accepts connections
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0) {
-            SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-            if (sock != INVALID_SOCKET) {
-                // Set non-blocking for timeout
-                u_long nonBlocking = 1;
-                ioctlsocket(sock, FIONBIO, &nonBlocking);
-
-                struct sockaddr_in addr;
-                addr.sin_family = AF_INET;
-                addr.sin_port = htons((u_short)p.port);
-                addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-                connect(sock, (struct sockaddr*)&addr, sizeof(addr));
-
-                // Wait up to 2 seconds for connection
-                fd_set writefds;
-                FD_ZERO(&writefds);
-                FD_SET(sock, &writefds);
-                struct timeval tv;
-                tv.tv_sec = 2;
-                tv.tv_usec = 0;
-
-                int sel = select(0, nullptr, &writefds, nullptr, &tv);
-                if (sel > 0 && FD_ISSET(sock, &writefds)) {
-                    // Check if actually connected (not just writable due to error)
-                    int err = 0;
-                    int errLen = sizeof(err);
-                    getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&err, &errLen);
-                    if (err == 0) {
-                        status = "Listening";
-                    } else {
-                        status = "Not listening";
-                    }
-                } else {
-                    status = "Not listening (timeout)";
-                }
-                closesocket(sock);
+        try {
+            // ifconfig.co/port/N does an external TCP connect to our IP on port N
+            // Returns JSON: {"ip":"...","port":N,"reachable":true/false}
+            std::string response = CurlHandler::get(
+                "http://ifconfig.co/port/" + std::to_string(p.port), 10000);
+            if (response.find("\"reachable\": true") != std::string::npos ||
+                response.find("\"reachable\":true") != std::string::npos) {
+                status = "Open";
+            } else {
+                status = "Closed";
             }
-            WSACleanup();
+        } catch (...) {
+            status = "Check failed";
         }
-#else
-        status = "Check not available on this platform";
-#endif
 
-        if (status.find("Listening") != std::string::npos && status.find("Not") == std::string::npos) {
+        if (status == "Open") {
             log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status);
         } else {
             log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status, Log::WARNING);
         }
     }
-    log->addMessage("Local ports verified. For external access, check router port forwarding.");
-    log->addMessage("Test externally at: https://canyouseeme.org");
 }
 
 // ---- Static helpers ---------------------------------------------------------
