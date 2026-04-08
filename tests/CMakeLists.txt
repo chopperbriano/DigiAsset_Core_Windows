@@ -52,3 +52,27 @@ else()
   target_link_libraries(Google_Tests_run ssl crypto pthread)
   target_link_libraries(Google_Tests_run /lib/x86_64-linux-gnu/libjsoncpp.so jsonrpccpp-common jsonrpccpp-client)
 endif()
+
+# ---- Unit Tests (no external services required) ----
+set(UNIT_TESTS
+    BlobUnitTests.cpp
+    ConfigUnitTests.cpp
+    DatabaseUnitTests.cpp
+    VersionTests.cpp
+    Base58Tests.cpp)
+
+add_executable(Unit_Tests_run ${UNIT_TESTS})
+target_link_libraries(Unit_Tests_run digiasset_core_lib)
+target_link_libraries(Unit_Tests_run gtest gtest_main)
+
+if(WIN32 AND MSVC)
+  target_compile_options(Unit_Tests_run PRIVATE /Zc:char8_t-)
+  target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
+  target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-common.lib")
+  target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-client.lib")
+  target_link_libraries(Unit_Tests_run winhttp)
+else()
+  target_link_libraries(Unit_Tests_run sqlite3 curl)
+  target_link_libraries(Unit_Tests_run ssl crypto pthread)
+  target_link_libraries(Unit_Tests_run /lib/x86_64-linux-gnu/libjsoncpp.so jsonrpccpp-common jsonrpccpp-client)
+endif()
