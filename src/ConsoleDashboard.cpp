@@ -475,7 +475,7 @@ void ConsoleDashboard::checkPorts() {
         std::string name;
     };
     std::vector<PortInfo> ports;
-    ports.push_back({5001, "IPFS"});
+    ports.push_back({4001, "IPFS Swarm"});
 
     RPC::Server* rpc = app->getRpcServerIfSet();
     if (rpc) {
