@@ -40,7 +40,7 @@ SET(PATCH_VERSION 0)
 SET(SO_VERSION    0)
 
 # Windows port build number (increment for each Windows-specific release)
-SET(WIN_BUILD 9)
+SET(WIN_BUILD 10)
 
 # Add source directory
 include_directories(src)
