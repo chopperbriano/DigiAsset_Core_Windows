@@ -485,48 +485,26 @@ void ConsoleDashboard::checkPorts() {
 
     for (const auto& p : ports) {
         std::string status;
+
+        // Check if the local service is listening by connecting to localhost
         try {
-            // Use canyouseeme.org — POST with port number, it connects back to us
-            std::string response = CurlHandler::post(
-                "https://canyouseeme.org/",
-                {{"port", std::to_string(p.port)}},
-                10000);
-            if (response.find("could <b>not</b>") != std::string::npos ||
-                response.find("Error") != std::string::npos) {
-                // Extract reason if available
-                auto reasonPos = response.find("Reason:");
-                if (reasonPos != std::string::npos) {
-                    auto endPos = response.find("</", reasonPos);
-                    std::string reason = response.substr(reasonPos + 7, endPos - reasonPos - 7);
-                    // Strip HTML tags
-                    std::string clean;
-                    bool inTag = false;
-                    for (char c : reason) {
-                        if (c == '<') inTag = true;
-                        else if (c == '>') inTag = false;
-                        else if (!inTag) clean += c;
-                    }
-                    status = "Closed (" + clean + ")";
-                } else {
-                    status = "Closed";
-                }
-            } else if (response.find("can see") != std::string::npos ||
-                       response.find("Success") != std::string::npos) {
-                status = "Open";
-            } else {
-                status = "Unknown";
-            }
+            std::string url = "http://127.0.0.1:" + std::to_string(p.port) + "/";
+            CurlHandler::get(url, 2000);
+            status = "Listening (local OK)";
+        } catch (const CurlHandler::exceptionTimeout&) {
+            status = "Listening (local OK, no HTTP)";
         } catch (...) {
-            status = "Check failed (could not reach canyouseeme.org)";
+            status = "NOT listening locally";
         }
 
-        if (status == "Open") {
-            log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status);
-        } else {
+        if (status.find("NOT") != std::string::npos) {
             log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status, Log::WARNING);
+        } else {
+            log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status);
         }
     }
-    log->addMessage("Verify at https://canyouseeme.org if results seem wrong.");
+    log->addMessage("Local ports verified. For external access, check router port forwarding.");
+    log->addMessage("Test externally at: https://canyouseeme.org");
 }
 
 // ---- Static helpers ---------------------------------------------------------
