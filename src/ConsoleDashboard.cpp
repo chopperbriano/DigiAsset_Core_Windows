@@ -486,33 +486,38 @@ void ConsoleDashboard::checkPorts() {
     for (const auto& p : ports) {
         std::string status;
         try {
-            // Use portquiz.net — a public service that listens on all ports.
-            // If we can reach it on a given port, our outbound is fine.
-            // For inbound, use canyouseeme.org API style check.
-            std::string url = "https://portchecker.io/api/v1/query/"
-                + externalIP + "/" + std::to_string(p.port);
-            std::string response = CurlHandler::get(url, 5000);
-            if (response.find("\"status\":true") != std::string::npos ||
-                response.find("\"open\":true") != std::string::npos ||
-                response.find("reachable") != std::string::npos) {
+            // Use canyouseeme.org — POST with port number, it connects back to us
+            std::string response = CurlHandler::post(
+                "https://canyouseeme.org/",
+                {{"port", std::to_string(p.port)}},
+                10000);
+            if (response.find("could <b>not</b>") != std::string::npos ||
+                response.find("Error") != std::string::npos) {
+                // Extract reason if available
+                auto reasonPos = response.find("Reason:");
+                if (reasonPos != std::string::npos) {
+                    auto endPos = response.find("</", reasonPos);
+                    std::string reason = response.substr(reasonPos + 7, endPos - reasonPos - 7);
+                    // Strip HTML tags
+                    std::string clean;
+                    bool inTag = false;
+                    for (char c : reason) {
+                        if (c == '<') inTag = true;
+                        else if (c == '>') inTag = false;
+                        else if (!inTag) clean += c;
+                    }
+                    status = "Closed (" + clean + ")";
+                } else {
+                    status = "Closed";
+                }
+            } else if (response.find("can see") != std::string::npos ||
+                       response.find("Success") != std::string::npos) {
                 status = "Open";
             } else {
-                status = "Closed";
+                status = "Unknown";
             }
-        } catch (const CurlHandler::exceptionTimeout&) {
-            // Can't reach the checker service
-            status = "Unknown (checker timeout)";
         } catch (...) {
-            // Fallback: try direct TCP connect to own external IP
-            try {
-                std::string url = "http://" + externalIP + ":" + std::to_string(p.port) + "/";
-                CurlHandler::get(url, 3000);
-                status = "Open";
-            } catch (const CurlHandler::exceptionTimeout&) {
-                status = "Filtered (no hairpin NAT?)";
-            } catch (...) {
-                status = "Uncertain (test from external network to verify)";
-            }
+            status = "Check failed (could not reach canyouseeme.org)";
         }
 
         if (status == "Open") {
@@ -521,8 +526,7 @@ void ConsoleDashboard::checkPorts() {
             log->addMessage("  Port " + std::to_string(p.port) + " (" + p.name + "): " + status, Log::WARNING);
         }
     }
-    log->addMessage("Tip: If all ports show Filtered/Uncertain, your router may not support hairpin NAT.");
-    log->addMessage("     Test from a different network or use https://canyouseeme.org to verify.");
+    log->addMessage("Verify at https://canyouseeme.org if results seem wrong.");
 }
 
 // ---- Static helpers ---------------------------------------------------------
