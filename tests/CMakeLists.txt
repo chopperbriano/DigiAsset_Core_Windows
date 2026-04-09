@@ -56,8 +56,11 @@ endif()
 # ---- Unit Tests (no external services required) ----
 set(UNIT_TESTS
     BlobUnitTests.cpp
+    BlobEdgeCaseTests.cpp
     ConfigUnitTests.cpp
+    ConfigEdgeCaseTests.cpp
     DatabaseUnitTests.cpp
+    DatabaseFunctionalTests.cpp
     VersionTests.cpp
     Base58Tests.cpp)
 
