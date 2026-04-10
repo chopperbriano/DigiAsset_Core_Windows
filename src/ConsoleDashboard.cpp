@@ -242,11 +242,20 @@ void ConsoleDashboard::render() {
             std::thread([this]() { checkPspRegistration(); }).detach();
         }
     }
-    // Run IPFS announce diagnosis in background (at startup + every 10 min)
+    // Run IPFS announce diagnosis in background.
+    // Poll fast (every 15s) while we're waiting for a user-applied fix to
+    // take effect after IPFS Desktop restart; otherwise poll every 10 min.
     {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration<double>(now - _lastIpfsAnnounceCheck).count();
-        if (elapsed >= 600.0 || !_ipfsAnnounceChecked) {
+        double interval = 600.0;
+        {
+            std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+            if (_ipfsAnnounceFixApplied && !_ipfsAnnouncedDirectly) {
+                interval = 15.0; // aggressive polling until Kubo picks up the change
+            }
+        }
+        if (elapsed >= interval || !_ipfsAnnounceChecked) {
             // Only run once WebServer has had time to resolve external IP
             WebServer* ws = app->getWebServerIfSet();
             if (ws && !ws->getExternalIP().empty() && ws->getExternalIP() != "unknown") {
@@ -700,9 +709,14 @@ void ConsoleDashboard::checkIpfsAnnounce() {
     _lastIpfsAnnounceCheck = std::chrono::steady_clock::now();
 
     if (announced) {
-        _ipfsAnnounceHint.clear(); // nothing to fix
+        // Convergence reached: the fix (manual or auto) has taken effect
+        _ipfsAnnounceFixApplied = false;
+        _ipfsAnnounceHint.clear();
+    } else if (_ipfsAnnounceFixApplied) {
+        // Fix was applied but Kubo hasn't picked it up yet — keep reminding
+        _ipfsAnnounceHint = "Waiting for IPFS Desktop restart to pick up new announce list...";
     } else if (portOpen) {
-        _ipfsAnnounceHint = "Port 4001 is open but IPFS isn't announcing it — press [F] to fix";
+        _ipfsAnnounceHint = "Port 4001 is open but IPFS isn't announcing it - press [F] to fix";
     } else {
         _ipfsAnnounceHint.clear(); // NAT'd with no port forward — relay path is the right answer
     }
@@ -766,12 +780,18 @@ bool ConsoleDashboard::applyIpfsAnnounceFix() {
     log->addMessage("Addresses.Announce updated successfully.");
     log->addMessage("IMPORTANT: restart IPFS Desktop (tray icon -> Quit, relaunch) "
                     "to activate the new announce list.", Log::WARNING);
-    log->addMessage("After IPFS restart, DigiAssetCore will automatically pick up "
-                    "the direct address on the next keepalive cycle.");
+    log->addMessage("After IPFS restart, DigiAssetCore will verify the change "
+                    "automatically (checking every 15s).");
 
-    // Mark as applied so the hint goes away until next check
-    std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
-    _ipfsAnnounceHint = "Addresses.Announce set — restart IPFS Desktop to activate";
+    // Mark the fix as applied so the render loop polls aggressively until
+    // Kubo picks up the new announce list. Reset _lastIpfsAnnounceCheck
+    // to zero so the next render triggers an immediate re-check.
+    {
+        std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+        _ipfsAnnounceFixApplied = true;
+        _ipfsAnnounceHint = "Addresses.Announce set - restart IPFS Desktop to activate";
+        _lastIpfsAnnounceCheck = std::chrono::steady_clock::time_point{};
+    }
     return true;
 }
 

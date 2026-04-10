@@ -100,6 +100,7 @@ private:
     bool _ipfsAnnouncedDirectly = false;   // /id lists an address containing our WAN IP
     bool _ipfsPort4001Open = false;         // ifconfig.co reports 4001 reachable
     bool _ipfsAnnounceChecked = false;      // we've completed at least one check
+    bool _ipfsAnnounceFixApplied = false;   // F was pressed; poll aggressively until Kubo catches up
     std::string _ipfsAnnounceHint;          // dashboard status line, empty if all good
     std::chrono::steady_clock::time_point _lastIpfsAnnounceCheck;
     void checkIpfsAnnounce();               // background: diagnose state, set hint
