@@ -376,38 +376,96 @@ void ConsoleDashboard::render() {
     out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE << centerText(title, w) << RESET << "\n"; totalRows++;
     out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
 
-    // Row 3-5: Services
-    out << ERASE_LINE
-        << "  DigiByte Core: " << (dgbOnline ? (std::string(FG_GREEN) + "Online") : (std::string(FG_RED) + "Offline")) << RESET
-        << "    Database: " << (dbOnline ? (std::string(FG_GREEN) + "Ready") : (std::string(FG_RED) + "N/A")) << RESET
-        << "    IPFS: " << (ipfsOnline ? (std::string(FG_GREEN) + "Connected") : (std::string(FG_YELLOW) + "N/A")) << RESET
+    // ---- Aligned two-column header ----------------------------------------
+    // Layout (visible columns, ignoring ANSI escape codes):
+    //
+    //   col 0-1   left margin (2 spaces)
+    //   col 2-17  col1 label (16 chars: label + colon + spaces)
+    //   col 18-31 col1 value (14 chars, padded to fixed width)
+    //   col 32-45 col2 label (14 chars: label + colon + spaces)
+    //   col 46-?  col2 value (free width, end of line)
+    //
+    // For long-value rows (Web UI, Payout, Balance, PSP Pool), col1 takes the
+    // full row and the col2 cell is omitted.
+    //
+    // The cell helper pads invisible-length-correct, so ANSI color codes don't
+    // throw off column alignment.
+    const int COL1_LABEL_W = 16;
+    const int COL1_VALUE_W = 14;
+    const int COL2_LABEL_W = 14;
+
+    auto cell = [](const std::string& label, const std::string& value, const char* color,
+                   int labelW, int valueW) -> std::string {
+        std::string lp = label + ":";
+        if ((int)lp.size() < labelW) lp += std::string(labelW - lp.size(), ' ');
+        std::string result = lp;
+        if (color) result += color;
+        result += value;
+        result += RESET;
+        int pad = valueW - (int)value.size();
+        if (pad > 0) result += std::string(pad, ' ');
+        return result;
+    };
+
+    // Row: DigiByte Core | Database
+    out << ERASE_LINE << "  "
+        << cell("DigiByte Core", dgbOnline ? "Online" : "Offline",
+                dgbOnline ? FG_GREEN : FG_RED, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Database", dbOnline ? "Ready" : "N/A",
+                dbOnline ? FG_GREEN : FG_RED, COL2_LABEL_W, 0)
         << "\n"; totalRows++;
-    out << ERASE_LINE
-        << "  RPC Server:    " << (rpcOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(rpcPort)) : (std::string(FG_RED) + "Off")) << RESET
-        << "    Web Server: " << (webOnline ? (std::string(FG_GREEN) + "Port " + std::to_string(webPort)) : (std::string(FG_RED) + "Off")) << RESET
-        << "\n"; totalRows++;
-    // Web UI link + External IP
-    if (webOnline) {
-        out << ERASE_LINE
-            << "  Web UI: " << FG_CYAN << "http://localhost:" << std::to_string(webPort) << "/" << RESET;
+
+    // Row: IPFS | RPC Server
+    {
+        std::string rpcVal = rpcOnline ? ("Port " + std::to_string(rpcPort)) : std::string("Off");
+        out << ERASE_LINE << "  "
+            << cell("IPFS", ipfsOnline ? "Connected" : "N/A",
+                    ipfsOnline ? FG_GREEN : FG_YELLOW, COL1_LABEL_W, COL1_VALUE_W)
+            << cell("RPC Server", rpcVal,
+                    rpcOnline ? FG_GREEN : FG_RED, COL2_LABEL_W, 0)
+            << "\n"; totalRows++;
+    }
+
+    // Row: Web Server | External IP
+    {
+        std::string webVal = webOnline ? ("Port " + std::to_string(webPort)) : std::string("Off");
+        out << ERASE_LINE << "  "
+            << cell("Web Server", webVal,
+                    webOnline ? FG_GREEN : FG_RED, COL1_LABEL_W, COL1_VALUE_W);
         if (!externalIP.empty() && externalIP != "unknown") {
-            out << "    External IP: " << FG_BRIGHT_WHITE << externalIP << RESET;
+            out << cell("External IP", externalIP, FG_BRIGHT_WHITE, COL2_LABEL_W, 0);
         }
         out << "\n"; totalRows++;
     }
-    // Payout address + balance
+
+    // Row: Web UI (single column, full row)
+    if (webOnline) {
+        out << ERASE_LINE << "  "
+            << cell("Web UI", "http://localhost:" + std::to_string(webPort) + "/",
+                    FG_CYAN, COL1_LABEL_W, 0)
+            << "\n"; totalRows++;
+    }
+
+    // Row: Payout address (single column, full row)
     if (!_payoutAddress.empty()) {
-        out << ERASE_LINE
-            << "  Payout: " << FG_BRIGHT_WHITE << _payoutAddress << RESET;
-        if (!_payoutBalance.empty()) {
-            out << "    Balance: " << FG_GREEN << _payoutBalance << RESET
-                << DIM << " (updates every 4h)" << RESET;
-        }
-        out << "\n"; totalRows++;
+        out << ERASE_LINE << "  "
+            << cell("Payout", _payoutAddress, FG_BRIGHT_WHITE, COL1_LABEL_W, 0)
+            << "\n"; totalRows++;
     }
-    // PSP pool status + node count
+
+    // Row: Balance (single column with DIM "(updates every 4h)" suffix)
+    if (!_payoutBalance.empty()) {
+        std::string lp = std::string("Balance:") + std::string(COL1_LABEL_W - 8, ' ');
+        out << ERASE_LINE << "  " << lp
+            << FG_GREEN << _payoutBalance << RESET
+            << DIM << " (updates every 4h)" << RESET
+            << "\n"; totalRows++;
+    }
+
+    // Row: PSP Pool status (with optional Network: N nodes appended)
     if (!_pspStatus.empty()) {
-        out << ERASE_LINE << "  PSP Pool: ";
+        std::string lp = std::string("PSP Pool:") + std::string(COL1_LABEL_W - 9, ' ');
+        out << ERASE_LINE << "  " << lp;
         if (_pspStatus.find("reachable") != std::string::npos &&
             _pspStatus.find("unreachable") == std::string::npos) {
             out << FG_GREEN << _pspStatus << RESET;
@@ -421,11 +479,13 @@ void ConsoleDashboard::render() {
         out << "\n"; totalRows++;
     }
 
-    // IPFS announce hint — shown only when there's actionable advice
+    // Row: IPFS announce hint (conditional, only when there's actionable info)
     {
         std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
         if (!_ipfsAnnounceHint.empty()) {
-            out << ERASE_LINE << "  IPFS: " << FG_YELLOW << _ipfsAnnounceHint << RESET << "\n";
+            std::string lp = std::string("IPFS:") + std::string(COL1_LABEL_W - 5, ' ');
+            out << ERASE_LINE << "  " << lp
+                << FG_YELLOW << _ipfsAnnounceHint << RESET << "\n";
             totalRows++;
         }
     }
