@@ -109,6 +109,11 @@ private:
     void checkIpfsAnnounce();               // background: diagnose state, set hint
     bool applyIpfsAnnounceFix();            // [F] handler: POST to IPFS config API
 
+    // [V] handler: fetch /api/v0/id and emit copy-pasteable
+    // `ipfs swarm connect` commands so a known-good remote box (e.g. a Linux
+    // node) can confirm our announced multiaddrs are actually dialable.
+    void printSwarmConnectCommands();
+
     // Console dimensions
     int _width = 80;
     int _height = 25;

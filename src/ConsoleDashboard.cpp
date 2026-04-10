@@ -14,6 +14,7 @@
 #include <ctime>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -170,6 +171,16 @@ void ConsoleDashboard::processInput() {
                     std::thread([this]() { applyIpfsAnnounceFix(); }).detach();
                 }
                 break;
+            case 'v':
+            case 'V':
+                // Emit copy-pasteable swarm-connect commands for all announced
+                // addresses so the user can verify dial-back from a remote box.
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("Fetching announced multiaddrs from IPFS...");
+                    std::thread([this]() { printSwarmConnectCommands(); }).detach();
+                }
+                break;
             case 'h':
             case 'H':
             case '?':
@@ -195,7 +206,7 @@ void ConsoleDashboard::processInput() {
                             log->addMessage("External IP: " + ip);
                         }
                     }
-                    log->addMessage("Keys: Q=Quit  A=Assets  P=Port check  L=Log level  F=Fix IPFS announce  H=This info");
+                    log->addMessage("Keys: Q=Quit  A=Assets  P=Port check  L=Log level  F=Fix IPFS announce  V=Verify multiaddrs  H=This info");
                 }
                 break;
             default:
@@ -494,15 +505,21 @@ void ConsoleDashboard::render() {
 
     // Row: Time and Uptime
     {
-        auto now = std::chrono::system_clock::now();
-        auto time_t_val = std::chrono::system_clock::to_time_t(now);
-        std::tm* timeinfo = std::localtime(&time_t_val);
+        auto currentTime = std::chrono::system_clock::now();
+        auto time_t_val = std::chrono::system_clock::to_time_t(currentTime);
+        std::tm timeinfo_buffer{};
+        std::tm* timeinfo = &timeinfo_buffer;
+#ifdef _WIN32
+        localtime_s(&timeinfo_buffer, &time_t_val);
+#else
+        timeinfo = std::localtime(&time_t_val);
+#endif
         std::ostringstream timeOss;
         timeOss << std::put_time(timeinfo, "%H:%M:%S");
         std::string timeStr = timeOss.str();
 
         // Calculate uptime
-        auto uptime_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - _startTime).count();
+        auto uptime_seconds = std::chrono::duration_cast<std::chrono::seconds>(currentTime - _startTime).count();
         std::string uptimeStr = formatDuration((double)uptime_seconds);
 
         out << ERASE_LINE << "  "
@@ -621,7 +638,7 @@ void ConsoleDashboard::render() {
     if (showFixKey) {
         out << "  " << RESET << FG_YELLOW << "[F] Fix IPFS" << RESET << DIM;
     }
-    out << "  [H] Info" << RESET;
+    out << "  [V] Verify  [H] Info" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
@@ -886,6 +903,111 @@ bool ConsoleDashboard::applyIpfsAnnounceFix() {
         _lastIpfsAnnounceCheck = std::chrono::steady_clock::time_point{};
     }
     return true;
+}
+
+// ---- [V] Verify: dump swarm-connect commands for announced multiaddrs ------
+
+void ConsoleDashboard::printSwarmConnectCommands() {
+    Log* log = Log::GetInstance();
+
+    std::string idJson;
+    try {
+        idJson = CurlHandler::post(getIpfsApiBase() + "id", {}, 5000);
+    } catch (const std::exception& e) {
+        log->addMessage(std::string("Verify failed: IPFS API unreachable: ") + e.what(),
+                        Log::WARNING);
+        return;
+    }
+
+    // Extract "ID":"<peerId>"
+    std::string peerId;
+    {
+        size_t k = idJson.find("\"ID\"");
+        if (k != std::string::npos) {
+            size_t colon = idJson.find(':', k);
+            size_t q1 = (colon != std::string::npos) ? idJson.find('"', colon + 1) : std::string::npos;
+            size_t q2 = (q1 != std::string::npos) ? idJson.find('"', q1 + 1) : std::string::npos;
+            if (q2 != std::string::npos) peerId = idJson.substr(q1 + 1, q2 - q1 - 1);
+        }
+    }
+    if (peerId.empty()) {
+        log->addMessage("Verify failed: could not parse peer ID from /id response", Log::WARNING);
+        return;
+    }
+
+    // Extract "Addresses":[ ... ]
+    std::vector<std::string> addrs;
+    {
+        size_t k = idJson.find("\"Addresses\"");
+        size_t start = (k != std::string::npos) ? idJson.find('[', k) : std::string::npos;
+        size_t end = (start != std::string::npos) ? idJson.find(']', start) : std::string::npos;
+        if (start != std::string::npos && end != std::string::npos) {
+            size_t pos = start + 1;
+            while (pos < end) {
+                size_t q1 = idJson.find('"', pos);
+                if (q1 == std::string::npos || q1 >= end) break;
+                size_t q2 = idJson.find('"', q1 + 1);
+                if (q2 == std::string::npos || q2 >= end) break;
+                addrs.push_back(idJson.substr(q1 + 1, q2 - q1 - 1));
+                pos = q2 + 1;
+            }
+        }
+    }
+    if (addrs.empty()) {
+        log->addMessage("Verify failed: no addresses in /id response", Log::WARNING);
+        return;
+    }
+
+    // Filter out LAN/loopback/link-local — can't be dialed from another host.
+    auto isLan = [](const std::string& a) -> bool {
+        size_t p = a.find("/ip4/");
+        if (p != std::string::npos) {
+            p += 5;
+            size_t e = a.find('/', p);
+            std::string ip = (e == std::string::npos) ? a.substr(p) : a.substr(p, e - p);
+            if (ip.rfind("127.", 0) == 0) return true;
+            if (ip.rfind("10.", 0) == 0) return true;
+            if (ip.rfind("192.168.", 0) == 0) return true;
+            if (ip.rfind("169.254.", 0) == 0) return true;
+            if (ip.rfind("172.", 0) == 0) {
+                try {
+                    int o2 = std::stoi(ip.substr(4));
+                    if (o2 >= 16 && o2 <= 31) return true;
+                } catch (...) {}
+            }
+            return false;
+        }
+        if (a.find("/ip6/::1") != std::string::npos) return true;
+        if (a.find("/ip6/fe80") != std::string::npos) return true;
+        return false;
+    };
+
+    log->addMessage("--- Verify: run these from a known-good remote box (e.g. your Linux node) ---");
+    log->addMessage("Peer ID: " + peerId);
+    std::string selfSuffix = "/p2p/" + peerId;
+
+    int emitted = 0;
+    for (const auto& a : addrs) {
+        if (isLan(a)) continue;
+
+        // Kubo sometimes omits the trailing /p2p/<selfId>; swarm connect needs it.
+        std::string full = a;
+        if (full.size() < selfSuffix.size() ||
+            full.compare(full.size() - selfSuffix.size(), selfSuffix.size(), selfSuffix) != 0) {
+            full += selfSuffix;
+        }
+        log->addMessage("  ipfs swarm connect " + full);
+        emitted++;
+    }
+
+    if (emitted == 0) {
+        log->addMessage("  (no public addresses announced - press [F] to set Announce, "
+                        "or wait for relay addresses to appear)", Log::WARNING);
+    } else {
+        log->addMessage("Then: ipfs swarm peers | grep " + peerId.substr(0, 20));
+        log->addMessage("If the connect succeeds, mctrivia's server can reach you too.");
+    }
+    log->addMessage("--- end verify ---");
 }
 
 // ---- Port checking ----------------------------------------------------------
