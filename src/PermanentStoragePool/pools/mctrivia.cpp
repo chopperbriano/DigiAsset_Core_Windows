@@ -44,7 +44,11 @@ uint64_t mctrivia::getCost(const DigiByteTransaction& tx) {
     DigiAsset asset = tx.getIssuedAsset();
     string cid = asset.getCID();
     IPFS* ipfs = AppMain::GetInstance()->getIPFS();
-    size += ipfs->getSize(cid);
+    try {
+        size += ipfs->getSize(cid);
+    } catch (...) {
+        return 0; // Can't determine size — assume free or skip
+    }
 
     //download the metadata and decode it
     string metadataStr = ipfs->callOnDownloadSync(cid);
@@ -72,7 +76,11 @@ uint64_t mctrivia::getCost(const DigiByteTransaction& tx) {
         if (!ipfs->isIPFSurl(url)) throw PermanentStoragePool::exceptionCantEnablePSP(); //Not on IPFS so can't be included in the PSP
 
         //add to size value
-        size += ipfs->getSize(url.substr(7));
+        try {
+            size += ipfs->getSize(url.substr(7));
+        } catch (...) {
+            // Can't size — skip
+        }
     }
 
     //calculate us dollar cost
@@ -340,10 +348,14 @@ mctriviaMetaProcessor::mctriviaMetaProcessor(const string& serializedData, unsig
 
 bool mctriviaMetaProcessor::_shouldPinFile(const std::string& name, const std::string& mimeType, const std::string& cid) {
     IPFS* ipfs = AppMain::GetInstance()->getIPFS();
-    unsigned int size = ipfs->getSize(cid);
-    if (size <= _spaceLeft) {
-        _spaceLeft -= size;
-        return true;
+    try {
+        unsigned int size = ipfs->getSize(cid);
+        if (size <= _spaceLeft) {
+            _spaceLeft -= size;
+            return true;
+        }
+    } catch (...) {
+        // Can't get size (CID lost, IPFS error, etc.) — skip this file
     }
     return false;
 }

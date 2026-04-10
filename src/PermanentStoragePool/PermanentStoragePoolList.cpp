@@ -4,6 +4,7 @@
 
 #include "PermanentStoragePoolList.h"
 #include "AppMain.h"
+#include "Log.h"
 #include "PermanentStoragePool/pools/local.h"
 #include "PermanentStoragePool/pools/mctrivia.h"
 #include "static_block.hpp"
@@ -130,6 +131,7 @@ void PermanentStoragePoolList::addPool(std::unique_ptr<PermanentStoragePool> poo
  */
 
 void PermanentStoragePoolList::_callbackNewMetadata(const string& cid, const string& extra, const string& content, bool failed) {
+  try {
     AppMain* main = AppMain::GetInstance();
     //failed will always be false since no maxSleep ever set
 
@@ -148,8 +150,9 @@ void PermanentStoragePoolList::_callbackNewMetadata(const string& cid, const str
 
     //pin the main metadata if less than limit
     IPFS* ipfs = main->getIPFS();
-    if (content.length() < PSP_PIN_METADATA_LIMIT)
-        ipfs->pin(cid);
+    if (content.length() < PSP_PIN_METADATA_LIMIT) {
+        try { ipfs->pin(cid); } catch (...) {}
+    }
 
     //get the list of known PSPs
     PermanentStoragePoolList* pools = main->getPermanentStoragePoolList();
@@ -206,10 +209,17 @@ void PermanentStoragePoolList::_callbackNewMetadata(const string& cid, const str
                 pool->markAssetAsPartOfPool(assetIndex);
 
                 //pin the metadata if subscribed
-                if (pool->subscribed()) ipfs->pin(cid);
+                if (pool->subscribed()) {
+                    try { ipfs->pin(cid); } catch (...) {}
+                }
                 break;
         }
     }
+  } catch (const std::exception& e) {
+    Log::GetInstance()->addMessage(std::string("PSP metadata callback exception: ") + e.what(), Log::WARNING);
+  } catch (...) {
+    Log::GetInstance()->addMessage("PSP metadata callback unknown exception", Log::WARNING);
+  }
 }
 void PermanentStoragePoolList::processNewMetaData(const DigiByteTransaction& tx, unsigned int assetIndex, const string& cid) {
     //compute the decoding instructions
