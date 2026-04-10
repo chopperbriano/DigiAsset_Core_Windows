@@ -73,6 +73,11 @@ private:
     bool _payoutLoaded = false;
     void loadPayoutInfo();
 
+    // PSP registration status (refreshed every 10 minutes)
+    std::string _pspStatus; // "Registered", "Not registered", "Checking..."
+    std::chrono::steady_clock::time_point _lastPspCheck;
+    void checkPspRegistration();
+
     // Cached asset count (refreshed every 5 seconds)
     uint64_t _assetCount = 0;
     std::chrono::steady_clock::time_point _lastAssetCountTime;
