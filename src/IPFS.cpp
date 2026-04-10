@@ -247,42 +247,73 @@ string IPFS::getIP() {
 }
 
 string IPFS::findPublicAddress(const vector<string>& addresses, const string& ip) {
-    vector<string> possible;
-    regex tcpRegex(".*tcp.*");
-    regex ipRegex(".*" + ip + ".*");
-
-    //check if any of the values in addresses match what we are looking for
-    for (const auto& addr: addresses) {
-        if (regex_match(addr, tcpRegex) && regex_match(addr, ipRegex)) {
-            possible.push_back(addr);
-        }
-    }
-
-    //if all addresses where local lets construct what we think the public address should be
-    if (possible.empty()) {
-        regex constructRegex("^(.*ip[46]/)([^/]*)/(tcp.*$)");
-        smatch match;
-
+    // Priority 1: a real TCP address that already contains our WAN IP.
+    // This is the happy path: the node is directly reachable at ip:port.
+    {
+        vector<string> direct;
+        regex tcpRegex(".*tcp.*");
+        regex ipRegex(".*" + ip + ".*");
         for (const auto& addr: addresses) {
-            if (regex_match(addr, match, constructRegex)) {
-                possible.push_back(match[1].str() + ip + "/" + match[3].str());
+            if (regex_match(addr, tcpRegex) && regex_match(addr, ipRegex)) {
+                direct.push_back(addr);
             }
         }
+        if (!direct.empty()) {
+            if (direct.size() == 1) return direct[0];
+            //multiple — pick lowest port
+            string best;
+            int lowest = 65536;
+            regex portRegex("tcp/([0-9]*)/");
+            for (const auto& addr: direct) {
+                smatch match;
+                if (regex_search(addr, match, portRegex)) {
+                    int port = stoi(match[1].str());
+                    if (port < lowest) {
+                        best = addr;
+                        lowest = port;
+                    }
+                }
+            }
+            return best;
+        }
     }
 
-    //if only 1 possible that makes things easy just pick it
-    if (possible.size() == 1) {
-        return possible[0];
+    // Priority 2: a real p2p-circuit relay address. The node is behind NAT
+    // but IPFS has negotiated a relay — libp2p peers (including mctrivia's
+    // server) can dial the node THROUGH the relay using this exact multiaddr.
+    // We never fabricate these; we use them verbatim from the /id response.
+    // Skip loopback/link-local relays.
+    for (const auto& addr: addresses) {
+        if (addr.find("/p2p-circuit/") == string::npos) continue;
+        if (addr.find("/tcp/") == string::npos) continue;
+        if (addr.find("/127.0.0.1/") != string::npos) continue;
+        if (addr.find("/::1/") != string::npos) continue;
+        // Also skip RFC1918 private ranges as relay IPs — those aren't routable
+        if (addr.find("/ip4/10.") != string::npos) continue;
+        if (addr.find("/ip4/192.168.") != string::npos) continue;
+        if (addr.find("/ip4/172.16.") != string::npos) continue;
+        return addr;
     }
 
-    //if more than one possible pick the one with the lowest port number since that is likely correct
+    // Priority 3: last-resort fabrication (original behavior). Substitute our
+    // WAN IP into a local address. This only works if port 4001 is actually
+    // forwarded on the user's router; otherwise the server can't dial back.
+    vector<string> possible;
+    regex constructRegex("^(.*ip[46]/)([^/]*)/(tcp.*$)");
+    smatch match;
+    for (const auto& addr: addresses) {
+        if (regex_match(addr, match, constructRegex)) {
+            possible.push_back(match[1].str() + ip + "/" + match[3].str());
+        }
+    }
+    if (possible.size() == 1) return possible[0];
     string peerId;
     int lowest = 65536;
     regex portRegex("tcp/([0-9]*)/");
     for (const auto& addr: possible) {
-        smatch match;
-        if (regex_search(addr, match, portRegex)) {
-            int port = stoi(match[1].str());
+        smatch m;
+        if (regex_search(addr, m, portRegex)) {
+            int port = stoi(m[1].str());
             if (port < lowest) {
                 peerId = addr;
                 lowest = port;
