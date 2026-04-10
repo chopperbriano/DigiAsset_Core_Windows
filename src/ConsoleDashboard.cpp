@@ -503,8 +503,25 @@ void ConsoleDashboard::checkPspRegistration() {
             pos++;
         }
         _pspNodeCount = nodeCount;
-        _pspStatus = "Pool reachable";
-        _lastPspCheck = now; // cache success for 10 min
+
+        // Test the keepalive endpoint to detect the "unsubscribe failed" error
+        // which indicates the server isn't actually accepting registrations
+        try {
+            std::string kaResponse = CurlHandler::post(
+                "https://ipfs.digiassetx.com/keepalive",
+                {{"address", "test"}, {"peerId", "test"}, {"visible", "v"}, {"secret", "12345678"}},
+                5000);
+            if (kaResponse.find("unsubscribe failed") != std::string::npos) {
+                _pspStatus = "Pool reachable - server not accepting new registrations";
+            } else if (kaResponse.find("error") != std::string::npos) {
+                _pspStatus = "Pool reachable - keepalive returns error";
+            } else {
+                _pspStatus = "Pool reachable - keepalive OK";
+            }
+        } catch (...) {
+            _pspStatus = "Pool reachable - keepalive failed";
+        }
+        _lastPspCheck = now; // cache for 10 min
     } catch (...) {
         _pspStatus = "Pool unreachable";
         // don't cache failure — retry next refresh
