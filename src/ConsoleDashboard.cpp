@@ -4,6 +4,7 @@
 
 #include "ConsoleDashboard.h"
 #include "AppMain.h"
+#include "Config.h"
 #include "CurlHandler.h"
 #include "Log.h"
 #include "Version.h"
@@ -158,6 +159,15 @@ void ConsoleDashboard::processInput() {
                     }
                 }
                 break;
+            case 'f':
+            case 'F':
+                // Fix IPFS Addresses.Announce when we've detected the fixable condition
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("Attempting to fix IPFS announce list...");
+                    std::thread([this]() { applyIpfsAnnounceFix(); }).detach();
+                }
+                break;
             case 'h':
             case 'H':
             case '?':
@@ -183,7 +193,7 @@ void ConsoleDashboard::processInput() {
                             log->addMessage("External IP: " + ip);
                         }
                     }
-                    log->addMessage("Keys: Q=Quit  A=Assets  P=Port check  L=Log level  H=This info");
+                    log->addMessage("Keys: Q=Quit  A=Assets  P=Port check  L=Log level  F=Fix IPFS announce  H=This info");
                 }
                 break;
             default:
@@ -230,6 +240,18 @@ void ConsoleDashboard::render() {
         auto elapsed = std::chrono::duration<double>(now - _lastPspCheck).count();
         if (elapsed >= 600.0 || _pspStatus.empty()) {
             std::thread([this]() { checkPspRegistration(); }).detach();
+        }
+    }
+    // Run IPFS announce diagnosis in background (at startup + every 10 min)
+    {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration<double>(now - _lastIpfsAnnounceCheck).count();
+        if (elapsed >= 600.0 || !_ipfsAnnounceChecked) {
+            // Only run once WebServer has had time to resolve external IP
+            WebServer* ws = app->getWebServerIfSet();
+            if (ws && !ws->getExternalIP().empty() && ws->getExternalIP() != "unknown") {
+                std::thread([this]() { checkIpfsAnnounce(); }).detach();
+            }
         }
     }
 
@@ -390,6 +412,15 @@ void ConsoleDashboard::render() {
         out << "\n"; totalRows++;
     }
 
+    // IPFS announce hint — shown only when there's actionable advice
+    {
+        std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+        if (!_ipfsAnnounceHint.empty()) {
+            out << ERASE_LINE << "  IPFS: " << FG_YELLOW << _ipfsAnnounceHint << RESET << "\n";
+            totalRows++;
+        }
+    }
+
     // Row 5: separator
     out << ERASE_LINE << std::string(w, '-') << "\n"; totalRows++;
 
@@ -482,7 +513,17 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar (cursor is already on the right line after the \n above)
-    out << ERASE_LINE << DIM << " [Q] Quit  [A] Assets  [P] Ports  [L] Log Level  [H] Info" << RESET;
+    // Include [F] only when the fix is applicable, to avoid cluttering the UI.
+    bool showFixKey = false;
+    {
+        std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+        showFixKey = !_ipfsAnnouncedDirectly && _ipfsPort4001Open && _ipfsAnnounceChecked;
+    }
+    out << ERASE_LINE << DIM << " [Q] Quit  [A] Assets  [P] Ports  [L] Log Level";
+    if (showFixKey) {
+        out << "  " << RESET << FG_YELLOW << "[F] Fix IPFS" << RESET << DIM;
+    }
+    out << "  [H] Info" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;
@@ -572,6 +613,166 @@ void ConsoleDashboard::loadPayoutInfo() {
     } catch (...) {
         if (_payoutBalance.empty()) _payoutBalance = "unavailable";
     }
+}
+
+// ---- IPFS announce detection & repair --------------------------------------
+
+namespace {
+    std::string urlEncodeComponent(const std::string& s) {
+        std::string out;
+        out.reserve(s.size() * 3);
+        for (unsigned char c : s) {
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+                out += (char)c;
+            } else {
+                char buf[4];
+                snprintf(buf, sizeof(buf), "%%%02X", c);
+                out += buf;
+            }
+        }
+        return out;
+    }
+
+    // Read ipfspath from config.cfg, default to Kubo's standard HTTP API.
+    std::string getIpfsApiBase() {
+        try {
+            Config config("config.cfg");
+            std::string p = config.getString("ipfspath", "http://localhost:5001/api/v0/");
+            if (!p.empty() && p.back() != '/') p += '/';
+            return p;
+        } catch (...) {
+            return "http://localhost:5001/api/v0/";
+        }
+    }
+}
+
+void ConsoleDashboard::checkIpfsAnnounce() {
+    // Snapshot the WAN IP from the web server (already resolved via ipify at startup)
+    AppMain* app = AppMain::GetInstance();
+    WebServer* ws = app->getWebServerIfSet();
+    std::string wanIp;
+    if (ws) wanIp = ws->getExternalIP();
+    if (wanIp.empty() || wanIp == "unknown") {
+        std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+        _ipfsAnnounceHint.clear();
+        return;
+    }
+
+    std::string apiBase = getIpfsApiBase();
+
+    // Step 1: does IPFS /id already list an address containing our WAN IP?
+    bool announced = false;
+    try {
+        std::string idJson = CurlHandler::post(apiBase + "id", {}, 5000);
+        // Cheap substring check — we don't need full JSON parsing for this.
+        if (idJson.find(wanIp) != std::string::npos) {
+            announced = true;
+        }
+    } catch (...) {
+        // IPFS API unreachable — can't diagnose, bail out quietly
+        std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+        _ipfsAnnounceHint.clear();
+        _ipfsAnnounceChecked = false;
+        return;
+    }
+
+    // Step 2: if not announced, probe port 4001 externally to see whether
+    // fixing is even possible. If the port isn't reachable, setting
+    // Addresses.Announce would advertise a dead address.
+    bool portOpen = false;
+    if (!announced) {
+        try {
+            std::string resp = CurlHandler::get("http://ifconfig.co/port/4001", 10000);
+            if (resp.find("\"reachable\": true") != std::string::npos ||
+                resp.find("\"reachable\":true") != std::string::npos) {
+                portOpen = true;
+            }
+        } catch (...) {
+            // leave portOpen = false
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+    _ipfsAnnouncedDirectly = announced;
+    _ipfsPort4001Open = portOpen;
+    _ipfsAnnounceChecked = true;
+    _lastIpfsAnnounceCheck = std::chrono::steady_clock::now();
+
+    if (announced) {
+        _ipfsAnnounceHint.clear(); // nothing to fix
+    } else if (portOpen) {
+        _ipfsAnnounceHint = "Port 4001 is open but IPFS isn't announcing it — press [F] to fix";
+    } else {
+        _ipfsAnnounceHint.clear(); // NAT'd with no port forward — relay path is the right answer
+    }
+}
+
+bool ConsoleDashboard::applyIpfsAnnounceFix() {
+    Log* log = Log::GetInstance();
+    AppMain* app = AppMain::GetInstance();
+
+    // Must have a known WAN IP to announce
+    WebServer* ws = app->getWebServerIfSet();
+    std::string wanIp;
+    if (ws) wanIp = ws->getExternalIP();
+    if (wanIp.empty() || wanIp == "unknown") {
+        log->addMessage("Fix aborted: external IP not known yet", Log::WARNING);
+        return false;
+    }
+
+    // Sanity check: only run if our diagnosis said the port is open. This
+    // prevents setting Announce to a dead address on a NAT'd box.
+    {
+        std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+        if (!_ipfsAnnounceChecked) {
+            log->addMessage("Fix aborted: diagnosis hasn't run yet, please wait a moment", Log::WARNING);
+            return false;
+        }
+        if (_ipfsAnnouncedDirectly) {
+            log->addMessage("Nothing to fix: IPFS is already announcing a direct address");
+            return false;
+        }
+        if (!_ipfsPort4001Open) {
+            log->addMessage("Fix aborted: port 4001 is NOT reachable from the internet. "
+                            "Forward TCP 4001 on your router first (press [P] to recheck).",
+                            Log::WARNING);
+            return false;
+        }
+    }
+
+    // Build the JSON array argument: ["/ip4/<wan>/tcp/4001","/ip4/<wan>/udp/4001/quic-v1"]
+    std::string jsonArray = "[\"/ip4/" + wanIp + "/tcp/4001\",\"/ip4/" + wanIp + "/udp/4001/quic-v1\"]";
+
+    // Build the IPFS config URL: POST .../config?arg=Addresses.Announce&arg=<encoded>&json=true
+    std::string apiBase = getIpfsApiBase();
+    std::string url = apiBase + "config?arg=Addresses.Announce&arg="
+                      + urlEncodeComponent(jsonArray) + "&json=true";
+
+    log->addMessage("Setting Kubo Addresses.Announce = " + jsonArray);
+    try {
+        std::string response = CurlHandler::post(url, {}, 10000);
+        // Kubo echoes the new config on success; look for our WAN IP in the response.
+        if (response.find(wanIp) == std::string::npos) {
+            log->addMessage("IPFS config set returned unexpected response: " + response.substr(0, 200),
+                            Log::WARNING);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        log->addMessage(std::string("IPFS config set failed: ") + e.what(), Log::WARNING);
+        return false;
+    }
+
+    log->addMessage("Addresses.Announce updated successfully.");
+    log->addMessage("IMPORTANT: restart IPFS Desktop (tray icon -> Quit, relaunch) "
+                    "to activate the new announce list.", Log::WARNING);
+    log->addMessage("After IPFS restart, DigiAssetCore will automatically pick up "
+                    "the direct address on the next keepalive cycle.");
+
+    // Mark as applied so the hint goes away until next check
+    std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
+    _ipfsAnnounceHint = "Addresses.Announce set — restart IPFS Desktop to activate";
+    return true;
 }
 
 // ---- Port checking ----------------------------------------------------------

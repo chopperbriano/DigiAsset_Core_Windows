@@ -94,6 +94,17 @@ private:
     bool _portCheckDone = false;
     void checkPorts();
 
+    // IPFS announce detection/repair (for NAT'd users who have port forwarded
+    // but Kubo's AutoNAT hasn't yet published a direct address in /id)
+    std::mutex _ipfsAnnounceMutex;
+    bool _ipfsAnnouncedDirectly = false;   // /id lists an address containing our WAN IP
+    bool _ipfsPort4001Open = false;         // ifconfig.co reports 4001 reachable
+    bool _ipfsAnnounceChecked = false;      // we've completed at least one check
+    std::string _ipfsAnnounceHint;          // dashboard status line, empty if all good
+    std::chrono::steady_clock::time_point _lastIpfsAnnounceCheck;
+    void checkIpfsAnnounce();               // background: diagnose state, set hint
+    bool applyIpfsAnnounceFix();            // [F] handler: POST to IPFS config API
+
     // Console dimensions
     int _width = 80;
     int _height = 25;
