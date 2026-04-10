@@ -248,19 +248,14 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     string url = "https://ipfs.digiassetx.com/" + commandStr;
     if (!extra.empty()) url += "/" + extra;
 
-    // Log the full request details
+    // Diagnostic detail at DEBUG level only — visible after pressing [L] in the
+    // dashboard. Includes the secret, so we never want it at INFO.
     if (command == KEEP_ALIVE) {
-        log->addMessage("PSP keepalive REQUEST: url=" + url, Log::INFO);
-        log->addMessage("PSP keepalive REQUEST: address=" + address + " peerId=" + peerId +
-            " visible=" + (_visible ? "v" : "h") + " secret=" + _secretCode, Log::INFO);
-    }
-
-    // Build the exact body string for debug logging
-    std::string body = "address=" + address + "&peerId=" + peerId +
-                       "&visible=" + (_visible ? std::string("v") : std::string("h")) +
-                       "&secret=" + _secretCode;
-    if (command == KEEP_ALIVE) {
-        log->addMessage("PSP keepalive REQUEST body: " + body, Log::INFO);
+        log->addMessage("PSP keepalive REQUEST: url=" + url, Log::DEBUG);
+        log->addMessage("PSP keepalive REQUEST body: address=" + address +
+                        "&peerId=" + peerId +
+                        "&visible=" + (_visible ? std::string("v") : std::string("h")) +
+                        "&secret=" + _secretCode, Log::DEBUG);
     }
 
     std::string response;
@@ -277,8 +272,23 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     }
 
     if (command == KEEP_ALIVE) {
-        log->addMessage("PSP keepalive RESPONSE: " + response, Log::INFO);
-        log->addMessage("Reported online to ipfs.digiassetx.com with server id: " + peerId);
+        // The server's `keepalive` endpoint always returns
+        //   {"error":"unsubscribe failed will time out anyways"}
+        // for both successful and unsuccessful keepalives — confirmed by direct
+        // curl from a working Linux node that DOES receive payments. The text
+        // is misleading; treat it as the expected OK response and only flag
+        // anything else as an actual problem.
+        const std::string expectedOk = "unsubscribe failed will time out anyways";
+        bool responseOk = (response.find(expectedOk) != std::string::npos);
+
+        log->addMessage("PSP keepalive RESPONSE: " + response, Log::DEBUG);
+        if (responseOk) {
+            log->addMessage("Reported online to ipfs.digiassetx.com (server id: " +
+                            peerId + ")");
+        } else {
+            log->addMessage("PSP keepalive returned UNEXPECTED response: " + response,
+                            Log::WARNING);
+        }
     }
 
     //update the bad list
