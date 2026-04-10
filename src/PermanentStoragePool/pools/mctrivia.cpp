@@ -175,7 +175,7 @@ string mctrivia::serializeMetaProcessor(const DigiByteTransaction& tx) {
     const std::set<std::string> addresses = {
             "dgb1q84h0g4lpy0prppc2507wf7ngne26thza0sntgr",
             "dgb1q8c6p9nht8055lr5fczcvc4v29hunluqv3n3gaf",
-            "dgb1qatvzudt2jey06kx8zn3a6p0nw689s9dxkjp57g"
+            "dgb1qatvzudt2jey06kx8zn3a6p0nw689s9dxkjp57g", // FIX: missing comma in upstream concatenated this with next line
             "dgb1qfc9029kc8ptvqt2nuqe4sxtps2nd83kq7pugtm",
             "dgb1qhucf64cleqdme9637vukgxau8aflpk00thlq98",
             "dgb1qj4glly6ka7py8pkdme9t0vh77s0gym0vq2esee",
