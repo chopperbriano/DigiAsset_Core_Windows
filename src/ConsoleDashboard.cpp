@@ -532,12 +532,20 @@ void ConsoleDashboard::loadPayoutInfo() {
     try {
         std::string response = CurlHandler::get(
             "http://chainz.cryptoid.info/dgb/api.dws?q=getbalance&a=" + _payoutAddress, 5000);
-        // Response is just the balance number like "21.2103"
+        // Response is a balance string like "21.2103" (varying decimal precision)
         // Trim whitespace
         while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' ')) {
             response.pop_back();
         }
-        _payoutBalance = response + " DGB";
+        // Format to exactly 4 decimal places
+        try {
+            double balance = std::stod(response);
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(4) << balance;
+            _payoutBalance = oss.str() + " DGB";
+        } catch (...) {
+            _payoutBalance = response + " DGB"; // fallback to raw response
+        }
         _lastBalanceTime = now;
     } catch (...) {
         if (_payoutBalance.empty()) _payoutBalance = "unavailable";
