@@ -282,18 +282,58 @@ string IPFS::findPublicAddress(const vector<string>& addresses, const string& ip
     // but IPFS has negotiated a relay — libp2p peers (including mctrivia's
     // server) can dial the node THROUGH the relay using this exact multiaddr.
     // We never fabricate these; we use them verbatim from the /id response.
-    // Skip loopback/link-local relays.
+    //
+    // Preference order within relay addresses:
+    //   1. /ip4/PUBLIC/tcp/PORT/p2p/RELAY/p2p-circuit/p2p/SELF  — plain TCP, most universal
+    //   2. /ip6/PUBLIC/tcp/PORT/...                              — IPv6 plain TCP
+    //   3. /dns4/.../tcp/PORT/...                                — DNS-based (may use TLS/WSS)
+    //   4. anything else with /p2p-circuit/ and /tcp/
+    // Skip loopback, link-local, and RFC1918 relays (not routable from the internet).
+    auto isUnroutableRelay = [](const string& addr) -> bool {
+        if (addr.find("/127.0.0.1/") != string::npos) return true;
+        if (addr.find("/::1/") != string::npos) return true;
+        if (addr.find("/ip4/10.") != string::npos) return true;
+        if (addr.find("/ip4/192.168.") != string::npos) return true;
+        if (addr.find("/ip4/172.16.") != string::npos) return true;
+        if (addr.find("/ip4/172.17.") != string::npos) return true;
+        if (addr.find("/ip4/172.18.") != string::npos) return true;
+        if (addr.find("/ip4/172.19.") != string::npos) return true;
+        if (addr.find("/ip4/172.2") != string::npos) return true;   // 172.20–172.29
+        if (addr.find("/ip4/172.30.") != string::npos) return true;
+        if (addr.find("/ip4/172.31.") != string::npos) return true;
+        if (addr.find("/ip4/169.254.") != string::npos) return true; // link-local
+        return false;
+    };
+    auto isPlainTcpRelay = [](const string& addr) -> bool {
+        // Plain TCP = no /tls/, /ws/, /wss/, /quic/, /webtransport/, /webrtc/ segments before /p2p-circuit/
+        size_t circuit = addr.find("/p2p-circuit/");
+        if (circuit == string::npos) return false;
+        string pre = addr.substr(0, circuit);
+        if (pre.find("/tls/") != string::npos) return false;
+        if (pre.find("/ws/") != string::npos) return false;
+        if (pre.find("/wss/") != string::npos) return false;
+        if (pre.find("/quic") != string::npos) return false;
+        if (pre.find("/webtransport") != string::npos) return false;
+        if (pre.find("/webrtc") != string::npos) return false;
+        return true;
+    };
+
+    vector<string> relayIp4Plain, relayIp6Plain, relayDns, relayOther;
     for (const auto& addr: addresses) {
         if (addr.find("/p2p-circuit/") == string::npos) continue;
         if (addr.find("/tcp/") == string::npos) continue;
-        if (addr.find("/127.0.0.1/") != string::npos) continue;
-        if (addr.find("/::1/") != string::npos) continue;
-        // Also skip RFC1918 private ranges as relay IPs — those aren't routable
-        if (addr.find("/ip4/10.") != string::npos) continue;
-        if (addr.find("/ip4/192.168.") != string::npos) continue;
-        if (addr.find("/ip4/172.16.") != string::npos) continue;
-        return addr;
+        if (isUnroutableRelay(addr)) continue;
+
+        bool plain = isPlainTcpRelay(addr);
+        if (addr.rfind("/ip4/", 0) == 0 && plain)       relayIp4Plain.push_back(addr);
+        else if (addr.rfind("/ip6/", 0) == 0 && plain)  relayIp6Plain.push_back(addr);
+        else if (addr.rfind("/dns", 0) == 0)            relayDns.push_back(addr);
+        else                                             relayOther.push_back(addr);
     }
+    if (!relayIp4Plain.empty()) return relayIp4Plain.front();
+    if (!relayIp6Plain.empty()) return relayIp6Plain.front();
+    if (!relayDns.empty())       return relayDns.front();
+    if (!relayOther.empty())     return relayOther.front();
 
     // Priority 3: last-resort fabrication (original behavior). Substitute our
     // WAN IP into a local address. This only works if port 4001 is actually
