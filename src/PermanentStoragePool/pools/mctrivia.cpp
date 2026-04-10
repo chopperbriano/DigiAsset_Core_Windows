@@ -243,12 +243,8 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     //get values inside loop in case they have changed
     IPFS* ipfs = AppMain::GetInstance()->getIPFS();
     string peerId = ipfs->getPeerId();
-    // getPeerId() actually returns a full multiaddress like /ip4/X/tcp/Y/p2p/12D3Koo...
-    // Extract just the bare peer ID after /p2p/ for the keepalive call
-    auto p2pPos = peerId.find("/p2p/");
-    if (p2pPos != std::string::npos) {
-        peerId = peerId.substr(p2pPos + 5);
-    }
+    // Note: getPeerId() returns a full multiaddress like /ip4/X/tcp/Y/p2p/12D3Koo...
+    // The server expects this format (matches upstream Linux behavior).
     string url = "https://ipfs.digiassetx.com/" + commandStr;
     if (!extra.empty()) url += "/" + extra;
 
@@ -257,6 +253,14 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
         log->addMessage("PSP keepalive REQUEST: url=" + url, Log::INFO);
         log->addMessage("PSP keepalive REQUEST: address=" + address + " peerId=" + peerId +
             " visible=" + (_visible ? "v" : "h") + " secret=" + _secretCode, Log::INFO);
+    }
+
+    // Build the exact body string for debug logging
+    std::string body = "address=" + address + "&peerId=" + peerId +
+                       "&visible=" + (_visible ? std::string("v") : std::string("h")) +
+                       "&secret=" + _secretCode;
+    if (command == KEEP_ALIVE) {
+        log->addMessage("PSP keepalive REQUEST body: " + body, Log::INFO);
     }
 
     std::string response;
