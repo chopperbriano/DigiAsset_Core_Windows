@@ -135,11 +135,16 @@ void mctrivia::stop() {
  * Lets the server know we are sharing data
  */
 void mctrivia::keepAliveTask() {
+    Log* log = Log::GetInstance();
+    log->addMessage("PSP keepalive thread started (will ping every 20 minutes)", Log::INFO);
     while (_keepRunning.load()) {
         //make keep alive request
         try {
             _callServer(KEEP_ALIVE);
+        } catch (const std::exception& e) {
+            log->addMessage("PSP keepalive task exception: " + std::string(e.what()), Log::WARNING);
         } catch (...) {
+            log->addMessage("PSP keepalive task: unknown exception", Log::WARNING);
         }
 
         //sleep for 20 minutes
@@ -211,6 +216,7 @@ unique_ptr<PermanentStoragePoolMetaProcessor> mctrivia::deserializeMetaProcessor
  * @return
  */
 void mctrivia::_callServer(ServerCalls command, const string& extra) {
+    Log* log = Log::GetInstance();
     string commandStr;
     string address = "NA";
     switch (command) {
@@ -231,13 +237,30 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     string peerId = ipfs->getPeerId();
     string url = "https://ipfs.digiassetx.com/" + commandStr;
     if (!extra.empty()) url += "/" + extra;
-    CurlHandler::post(url, {{"address", address},
-                            {"peerId", peerId},
-                            {"visible", (_visible ? "v" : "h")},
-                            {"secret", _secretCode}});
-    if (command==KEEP_ALIVE) {
-        Log* log=Log::GetInstance();
-        log->addMessage("Reported online to ipfs.digiassetx.com with server id: "+peerId);
+
+    // Log the full request details
+    if (command == KEEP_ALIVE) {
+        log->addMessage("PSP keepalive REQUEST: url=" + url, Log::INFO);
+        log->addMessage("PSP keepalive REQUEST: address=" + address + " peerId=" + peerId +
+            " visible=" + (_visible ? "v" : "h") + " secret=" + _secretCode, Log::INFO);
+    }
+
+    std::string response;
+    try {
+        response = CurlHandler::post(url, {{"address", address},
+                                {"peerId", peerId},
+                                {"visible", (_visible ? "v" : "h")},
+                                {"secret", _secretCode}});
+    } catch (const std::exception& e) {
+        if (command == KEEP_ALIVE) {
+            log->addMessage("PSP keepalive FAILED: " + std::string(e.what()), Log::WARNING);
+        }
+        throw;
+    }
+
+    if (command == KEEP_ALIVE) {
+        log->addMessage("PSP keepalive RESPONSE: " + response, Log::INFO);
+        log->addMessage("Reported online to ipfs.digiassetx.com with server id: " + peerId);
     }
 
     //update the bad list
