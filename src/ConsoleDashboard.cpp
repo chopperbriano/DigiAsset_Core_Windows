@@ -582,7 +582,11 @@ void ConsoleDashboard::checkPspRegistration() {
         if (selfListed) {
             _pspStatus = "Pool reachable - this node is listed";
         } else {
-            _pspStatus = "Pool reachable - this node not yet listed";
+            // Server-side registration is not instant. Once keepalives start
+            // arriving, mctrivia's server has to crawl us, verify the pinned
+            // content over libp2p, and refresh map.json on its own schedule.
+            // In practice this takes a few hours after a brand-new subscribe.
+            _pspStatus = "Pool reachable - awaiting server registration (can take a few hours)";
         }
         _lastPspCheck = now; // cache for 10 min
     } catch (...) {
