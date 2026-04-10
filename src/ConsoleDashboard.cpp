@@ -493,7 +493,12 @@ void ConsoleDashboard::render() {
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
 
-    // Check pool reachability via map.json (public, no auth needed)
+    // Check pool reachability via map.json (public, no auth needed).
+    // map.json is the authoritative list of nodes the server has recently
+    // seen alive, so its contents are the only honest signal for "am I
+    // registered". The /keepalive endpoint ALWAYS returns
+    // {"error":"unsubscribe failed will time out anyways"} regardless of
+    // success — don't use it as a registration signal.
     try {
         std::string mapResponse = CurlHandler::get("https://ipfs.digiassetx.com/map.json", 5000);
         int nodeCount = 0;
@@ -504,22 +509,22 @@ void ConsoleDashboard::checkPspRegistration() {
         }
         _pspNodeCount = nodeCount;
 
-        // Test the keepalive endpoint to detect the "unsubscribe failed" error
-        // which indicates the server isn't actually accepting registrations
+        // Check if our own payout address appears anywhere in map.json —
+        // that's a strong signal the server sees us as an active contributor.
+        // (Peer ID matching would be better but map.json keys by payout.)
+        bool selfListed = false;
         try {
-            std::string kaResponse = CurlHandler::post(
-                "https://ipfs.digiassetx.com/keepalive",
-                {{"address", "test"}, {"peerId", "test"}, {"visible", "v"}, {"secret", "12345678"}},
-                5000);
-            if (kaResponse.find("unsubscribe failed") != std::string::npos) {
-                _pspStatus = "Pool reachable - server not accepting new registrations";
-            } else if (kaResponse.find("error") != std::string::npos) {
-                _pspStatus = "Pool reachable - keepalive returns error";
-            } else {
-                _pspStatus = "Pool reachable - keepalive OK";
+            Config config("config.cfg");
+            std::string payout = config.getString("psp0payout", "");
+            if (!payout.empty() && mapResponse.find(payout) != std::string::npos) {
+                selfListed = true;
             }
-        } catch (...) {
-            _pspStatus = "Pool reachable - keepalive failed";
+        } catch (...) {}
+
+        if (selfListed) {
+            _pspStatus = "Pool reachable - this node is listed";
+        } else {
+            _pspStatus = "Pool reachable - this node not yet listed";
         }
         _lastPspCheck = now; // cache for 10 min
     } catch (...) {
