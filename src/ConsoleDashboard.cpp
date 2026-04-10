@@ -380,12 +380,12 @@ void ConsoleDashboard::render() {
         if (_pspStatus.find("reachable") != std::string::npos &&
             _pspStatus.find("unreachable") == std::string::npos) {
             out << FG_GREEN << _pspStatus << RESET;
-            if (_pspNodeCount > 0) {
-                out << "    Network: " << FG_BRIGHT_WHITE << _pspNodeCount
-                    << RESET << DIM << " nodes online" << RESET;
-            }
         } else {
             out << FG_YELLOW << _pspStatus << RESET;
+        }
+        if (_pspNodeCount > 0) {
+            out << "    Network: " << FG_BRIGHT_WHITE << _pspNodeCount
+                << RESET << DIM << " nodes online" << RESET;
         }
         out << "\n"; totalRows++;
     }

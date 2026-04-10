@@ -264,6 +264,21 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
         extraHeaders += utf8ToWide(encoded);
         extraHeaders += L"\r\n";
     }
+    // libcurl automatically sets Content-Type for POSTFIELDS — match that behavior.
+    // Without this, servers like Express body-parser silently drop the body.
+    if (h->isPost && !h->postFields.empty()) {
+        // Only add if user hasn't already provided one
+        bool hasContentType = false;
+        for (curl_slist* sl = h->headers; sl; sl = sl->next) {
+            std::string hdr(sl->data);
+            std::string lower;
+            for (char c : hdr) lower += (char)tolower(c);
+            if (lower.find("content-type:") == 0) { hasContentType = true; break; }
+        }
+        if (!hasContentType) {
+            extraHeaders += L"Content-Type: application/x-www-form-urlencoded\r\n";
+        }
+    }
 
     const void* postData    = h->isPost ? h->postFields.c_str() : nullptr;
     DWORD       postDataLen = h->isPost ? (DWORD)h->postFields.size() : 0;
