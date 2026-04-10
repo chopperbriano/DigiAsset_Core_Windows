@@ -11,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <ctime>
 #include <algorithm>
 #include <cmath>
 
@@ -45,6 +46,7 @@ static inline std::string moveTo(int row, int col) {
 
 ConsoleDashboard::ConsoleDashboard() {
     _lastTime = std::chrono::steady_clock::now();
+    _startTime = std::chrono::system_clock::now();
 }
 
 ConsoleDashboard::~ConsoleDashboard() {
@@ -488,6 +490,25 @@ void ConsoleDashboard::render() {
                 << FG_YELLOW << _ipfsAnnounceHint << RESET << "\n";
             totalRows++;
         }
+    }
+
+    // Row: Time and Uptime
+    {
+        auto now = std::chrono::system_clock::now();
+        auto time_t_val = std::chrono::system_clock::to_time_t(now);
+        std::tm* timeinfo = std::localtime(&time_t_val);
+        std::ostringstream timeOss;
+        timeOss << std::put_time(timeinfo, "%H:%M:%S");
+        std::string timeStr = timeOss.str();
+
+        // Calculate uptime
+        auto uptime_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - _startTime).count();
+        std::string uptimeStr = formatDuration((double)uptime_seconds);
+
+        out << ERASE_LINE << "  "
+            << cell("Time", timeStr, FG_BRIGHT_WHITE, COL1_LABEL_W, COL1_VALUE_W)
+            << cell("Uptime", uptimeStr, FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+            << "\n"; totalRows++;
     }
 
     // Row 5: separator

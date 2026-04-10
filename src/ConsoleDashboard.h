@@ -83,6 +83,9 @@ private:
     uint64_t _assetCount = 0;
     std::chrono::steady_clock::time_point _lastAssetCountTime;
 
+    // Application start time (system_clock for displaying actual time)
+    std::chrono::system_clock::time_point _startTime;
+
     // Keyboard input
     std::atomic<bool>       _quitRequested{false};
     std::function<void()>   _quitCallback;
