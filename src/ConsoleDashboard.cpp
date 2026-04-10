@@ -374,13 +374,16 @@ void ConsoleDashboard::render() {
         }
         out << "\n"; totalRows++;
     }
-    // PSP registration status
+    // PSP pool status + node count
     if (!_pspStatus.empty()) {
-        out << ERASE_LINE << "  PSP Status: ";
-        if (_pspStatus.find("Registered") != std::string::npos) {
+        out << ERASE_LINE << "  PSP Pool: ";
+        if (_pspStatus.find("reachable") != std::string::npos &&
+            _pspStatus.find("unreachable") == std::string::npos) {
             out << FG_GREEN << _pspStatus << RESET;
-        } else if (_pspStatus.find("Checking") != std::string::npos) {
-            out << DIM << _pspStatus << RESET;
+            if (_pspNodeCount > 0) {
+                out << "    Network: " << FG_BRIGHT_WHITE << _pspNodeCount
+                    << RESET << DIM << " nodes online" << RESET;
+            }
         } else {
             out << FG_YELLOW << _pspStatus << RESET;
         }
@@ -491,26 +494,21 @@ void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
 
     // Check pool reachability via map.json (public, no auth needed)
-    std::string poolStatus;
     try {
         std::string mapResponse = CurlHandler::get("https://ipfs.digiassetx.com/map.json", 5000);
-        size_t nodeCount = 0;
+        int nodeCount = 0;
         size_t pos = 0;
         while ((pos = mapResponse.find("\"version\"", pos)) != std::string::npos) {
             nodeCount++;
             pos++;
         }
-        poolStatus = "Pool reachable (" + std::to_string(nodeCount) + " nodes total)";
+        _pspNodeCount = nodeCount;
+        _pspStatus = "Pool reachable";
+        _lastPspCheck = now; // cache success for 10 min
     } catch (...) {
-        poolStatus = "Pool unreachable";
+        _pspStatus = "Pool unreachable";
+        // don't cache failure — retry next refresh
     }
-
-    // Don't cache failures so retries happen every refresh; cache success for 10min
-    if (poolStatus.find("reachable") != std::string::npos &&
-        poolStatus.find("unreachable") == std::string::npos) {
-        _lastPspCheck = now;
-    }
-    _pspStatus = poolStatus;
 }
 
 // ---- Payout balance ---------------------------------------------------------

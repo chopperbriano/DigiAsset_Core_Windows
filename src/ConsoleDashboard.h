@@ -73,8 +73,9 @@ private:
     bool _payoutLoaded = false;
     void loadPayoutInfo();
 
-    // PSP registration status (refreshed every 10 minutes)
-    std::string _pspStatus; // "Registered", "Not registered", "Checking..."
+    // PSP pool status (refreshed every 10 minutes)
+    std::string _pspStatus;
+    int _pspNodeCount = 0;
     std::chrono::steady_clock::time_point _lastPspCheck;
     void checkPspRegistration();
 
