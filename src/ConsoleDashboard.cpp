@@ -489,52 +489,28 @@ void ConsoleDashboard::render() {
 
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration<double>(now - _lastPspCheck).count();
-    if (elapsed < 600.0 && !_pspStatus.empty()) return; // refresh every 10 minutes
 
-    _pspStatus = "Checking...";
-
-    // Get our peer ID from IPFS
-    AppMain* app = AppMain::GetInstance();
-    IPFS* ipfs = app->getIPFSIfSet();
-    if (!ipfs) {
-        _pspStatus = "IPFS not ready";
-        _lastPspCheck = now;
-        return;
-    }
-
-    std::string ourPeerId;
+    // Check pool reachability via map.json (public, no auth needed)
+    std::string poolStatus;
     try {
-        ourPeerId = ipfs->getPeerId();
-    } catch (...) {
-        _pspStatus = "IPFS not ready";
-        _lastPspCheck = now;
-        return;
-    }
-    if (ourPeerId.empty()) {
-        _pspStatus = "IPFS not ready";
-        _lastPspCheck = now;
-        return;
-    }
-
-    // Try to verify by hitting the pool's public endpoints
-    try {
-        // map.json is the only working public endpoint that lists nodes
         std::string mapResponse = CurlHandler::get("https://ipfs.digiassetx.com/map.json", 5000);
-        // Count nodes in the map (rough estimate)
         size_t nodeCount = 0;
         size_t pos = 0;
         while ((pos = mapResponse.find("\"version\"", pos)) != std::string::npos) {
             nodeCount++;
             pos++;
         }
-        // We can't tell if WE are on the list (map.json has no peer IDs)
-        // but we can confirm the pool is reachable
-        _pspStatus = "Sending keepalive (pool has " + std::to_string(nodeCount) + " nodes)";
+        poolStatus = "Pool reachable (" + std::to_string(nodeCount) + " nodes total)";
     } catch (...) {
-        _pspStatus = "Pool server unreachable";
+        poolStatus = "Pool unreachable";
     }
-    _lastPspCheck = now;
+
+    // Don't cache failures so retries happen every refresh; cache success for 10min
+    if (poolStatus.find("reachable") != std::string::npos &&
+        poolStatus.find("unreachable") == std::string::npos) {
+        _lastPspCheck = now;
+    }
+    _pspStatus = poolStatus;
 }
 
 // ---- Payout balance ---------------------------------------------------------

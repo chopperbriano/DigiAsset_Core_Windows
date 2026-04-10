@@ -243,6 +243,12 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     //get values inside loop in case they have changed
     IPFS* ipfs = AppMain::GetInstance()->getIPFS();
     string peerId = ipfs->getPeerId();
+    // getPeerId() actually returns a full multiaddress like /ip4/X/tcp/Y/p2p/12D3Koo...
+    // Extract just the bare peer ID after /p2p/ for the keepalive call
+    auto p2pPos = peerId.find("/p2p/");
+    if (p2pPos != std::string::npos) {
+        peerId = peerId.substr(p2pPos + 5);
+    }
     string url = "https://ipfs.digiassetx.com/" + commandStr;
     if (!extra.empty()) url += "/" + extra;
 
