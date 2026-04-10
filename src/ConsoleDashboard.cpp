@@ -522,11 +522,19 @@ void ConsoleDashboard::render() {
     }
 
     // Help bar (cursor is already on the right line after the \n above)
-    // Include [F] only when the fix is applicable, to avoid cluttering the UI.
+    // [F] is shown ONLY when the fix is actionable right now:
+    //   - initial diagnosis completed
+    //   - IPFS is not already announcing a direct address
+    //   - port 4001 is externally reachable (otherwise fix would make it worse)
+    //   - the user hasn't already pressed F (in-flight or awaiting restart)
+    // Once any of those stops being true, [F] disappears from the help bar.
     bool showFixKey = false;
     {
         std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
-        showFixKey = !_ipfsAnnouncedDirectly && _ipfsPort4001Open && _ipfsAnnounceChecked;
+        showFixKey = _ipfsAnnounceChecked &&
+                     !_ipfsAnnouncedDirectly &&
+                     !_ipfsAnnounceFixApplied &&
+                     _ipfsPort4001Open;
     }
     out << ERASE_LINE << DIM << " [Q] Quit  [A] Assets  [P] Ports  [L] Log Level";
     if (showFixKey) {
