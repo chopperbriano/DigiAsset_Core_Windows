@@ -17,8 +17,11 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <conio.h>
+#pragma comment(lib, "Ws2_32.lib")
 #endif
 
 // ---- VT100 escape helpers --------------------------------------------------
@@ -361,11 +364,24 @@ void ConsoleDashboard::render() {
     bool dgbOnline = (dgb != nullptr);
     bool dbOnline = (db != nullptr);
     bool ipfsOnline = (app->getIPFSIfSet() != nullptr);
-    RPC::Server* rpcServer = app->getRpcServerIfSet();
-    bool rpcOnline = (rpcServer != nullptr);
-    unsigned int rpcPort = 0;
-    if (rpcOnline) {
-        rpcPort = rpcServer->getPort();
+
+    // RPC: probe the actual listen socket. AppMain stores a raw pointer to
+    // RPC::Server that becomes dangling if the detached accept-loop thread
+    // dies, so trusting getRpcServerIfSet() can show a stale port for a
+    // service that isn't actually listening.
+    {
+        auto rnow = std::chrono::steady_clock::now();
+        auto rElapsed = std::chrono::duration<double>(rnow - _lastRpcProbe).count();
+        if (rElapsed >= 30.0 || !_rpcProbed) {
+            std::thread([this]() { probeRpcServer(); }).detach();
+        }
+    }
+    bool rpcOnline;
+    unsigned int rpcPort;
+    {
+        std::lock_guard<std::mutex> lock(_rpcProbeMutex);
+        rpcOnline = _rpcListening;
+        rpcPort = _rpcProbedPort;
     }
     WebServer* webServer = app->getWebServerIfSet();
     bool webOnline = (webServer != nullptr && webServer->isRunning());
@@ -644,17 +660,70 @@ void ConsoleDashboard::render() {
     std::cout << out.str() << std::flush;
 }
 
+// ---- RPC server liveness probe ---------------------------------------------
+
+void ConsoleDashboard::probeRpcServer() {
+    // Read the configured port (default 14024 matches RPC::Server::Server)
+    unsigned int port = 14024;
+    try {
+        Config config("config.cfg");
+        port = (unsigned int)config.getInteger("rpcassetport", 14024);
+    } catch (...) {}
+
+    bool listening = false;
+#ifdef _WIN32
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
+        SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+        if (s != INVALID_SOCKET) {
+            // Non-blocking + select-with-timeout: short, never hang the dashboard
+            u_long nonblock = 1;
+            ioctlsocket(s, FIONBIO, &nonblock);
+
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons((u_short)port);
+            addr.sin_addr.s_addr = htonl(0x7F000001); // 127.0.0.1
+
+            int rc = connect(s, (sockaddr*)&addr, sizeof(addr));
+            if (rc == 0) {
+                listening = true;
+            } else if (WSAGetLastError() == WSAEWOULDBLOCK) {
+                fd_set wfds;
+                FD_ZERO(&wfds);
+                FD_SET(s, &wfds);
+                timeval tv{0, 200000}; // 200 ms
+                int sel = select(0, nullptr, &wfds, nullptr, &tv);
+                if (sel > 0) {
+                    int err = 0;
+                    int errlen = sizeof(err);
+                    getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&err, &errlen);
+                    if (err == 0) listening = true;
+                }
+            }
+            closesocket(s);
+        }
+        WSACleanup();
+    }
+#endif
+
+    std::lock_guard<std::mutex> lock(_rpcProbeMutex);
+    _rpcListening = listening;
+    _rpcProbedPort = port;
+    _rpcProbed = true;
+    _lastRpcProbe = std::chrono::steady_clock::now();
+}
+
 // ---- PSP registration status ------------------------------------------------
 
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
 
-    // Check pool reachability via map.json (public, no auth needed).
-    // map.json is the authoritative list of nodes the server has recently
-    // seen alive, so its contents are the only honest signal for "am I
-    // registered". The /keepalive endpoint ALWAYS returns
-    // {"error":"unsubscribe failed will time out anyways"} regardless of
-    // success — don't use it as a registration signal.
+    // map.json is anonymized geo data — entries are {version,country,region,city,
+    // longitude,latitude} only, no payout addresses or peer IDs. So all we can
+    // tell from it is "the pool server is up" and "how many nodes it sees online".
+    // Anything stronger (am I registered, am I being paid) requires a per-node
+    // endpoint mctrivia hasn't exposed.
     try {
         std::string mapResponse = CurlHandler::get("https://ipfs.digiassetx.com/map.json", 5000);
         int nodeCount = 0;
@@ -664,28 +733,7 @@ void ConsoleDashboard::checkPspRegistration() {
             pos++;
         }
         _pspNodeCount = nodeCount;
-
-        // Check if our own payout address appears anywhere in map.json —
-        // that's a strong signal the server sees us as an active contributor.
-        // (Peer ID matching would be better but map.json keys by payout.)
-        bool selfListed = false;
-        try {
-            Config config("config.cfg");
-            std::string payout = config.getString("psp0payout", "");
-            if (!payout.empty() && mapResponse.find(payout) != std::string::npos) {
-                selfListed = true;
-            }
-        } catch (...) {}
-
-        if (selfListed) {
-            _pspStatus = "Pool reachable - this node is listed";
-        } else {
-            // Server-side registration is not instant. Once keepalives start
-            // arriving, mctrivia's server has to crawl us, verify the pinned
-            // content over libp2p, and refresh map.json on its own schedule.
-            // In practice this takes a few hours after a brand-new subscribe.
-            _pspStatus = "Pool reachable - awaiting server registration (can take a few hours)";
-        }
+        _pspStatus = "Pool reachable";
         _lastPspCheck = now; // cache for 10 min
     } catch (...) {
         _pspStatus = "Pool unreachable";
@@ -699,7 +747,12 @@ void ConsoleDashboard::loadPayoutInfo() {
     if (!_payoutLoaded) {
         try {
             Config config("config.cfg");
-            _payoutAddress = config.getString("psp0payout", "");
+            // mctrivia is pool index 1 (local is 0). Fall back to psp0payout
+            // for legacy configs that wrote the wrong key.
+            _payoutAddress = config.getString("psp1payout", "");
+            if (_payoutAddress.empty()) {
+                _payoutAddress = config.getString("psp0payout", "");
+            }
         } catch (...) {}
         _payoutLoaded = true;
         _lastBalanceTime = std::chrono::steady_clock::now() - std::chrono::seconds(120); // force immediate fetch

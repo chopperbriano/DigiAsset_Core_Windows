@@ -97,6 +97,16 @@ private:
     bool _portCheckDone = false;
     void checkPorts();
 
+    // RPC server liveness probe (cached). The AppMain raw pointer can outlive
+    // the actual listen socket if the RPC accept loop dies in its detached
+    // thread, so we verify by TCP-connecting to the configured rpcassetport.
+    std::mutex _rpcProbeMutex;
+    bool _rpcProbed = false;
+    bool _rpcListening = false;
+    unsigned int _rpcProbedPort = 0;
+    std::chrono::steady_clock::time_point _lastRpcProbe;
+    void probeRpcServer();
+
     // IPFS announce detection/repair (for NAT'd users who have port forwarded
     // but Kubo's AutoNAT hasn't yet published a direct address in /id)
     std::mutex _ipfsAnnounceMutex;
