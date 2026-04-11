@@ -4,17 +4,28 @@
 
 #include "mctrivia.h"
 #include "AppMain.h"
+#include "Config.h"
 #include "CurlHandler.h"
+#include "IPFS.h"
 #include "Log.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <set>
+#include <sstream>
 #include <thread>
 using namespace std;
 
-mctrivia::mctrivia() : _keepRunning(false){};
+namespace {
+    // Hard-coded base URL. Kept non-configurable for now — the Windows fork is
+    // intentionally a drop-in for mctrivia's upstream setup, not an attempt to
+    // become a new pool operator. If/when a replacement pool is set up, this
+    // becomes a config key.
+    const std::string MCTRIVIA_BASE = "https://ipfs.digiassetx.com";
+}
+
+mctrivia::mctrivia() : _keepRunning(false), _fetcherRunning(false) {}
 
 
 
@@ -25,7 +36,7 @@ string mctrivia::getDescription() {
     return "Originally operated by digiassetX Inc and continued to run by Matthew Cornelisse.  This pool makes sure asset metadata is always available and pays others DigiAsset Core nodes to help distribute the metadata.";
 }
 string mctrivia::getURL() {
-    return "https://ipfs.digiassetx.com";
+    return MCTRIVIA_BASE;
 }
 
 /**
@@ -117,30 +128,63 @@ void mctrivia::enable(DigiByteTransaction& tx) {
 }
 void mctrivia::_setConfig(const Config& config) {
     _visible = config.getBool("psp1visible", true);
+
+    // Persistent node identity. Historically this was a fresh random string on
+    // every startup — harmless-looking but meant the server saw us as a new
+    // identity each restart. Read from config; generate + persist on first run.
+    _secretCode = config.getString("psp1secret", "");
+    if (_secretCode.empty()) {
+        _secretCode = utils::generateRandom(8, utils::CodeType::ALPHANUMERIC);
+        try {
+            Config writable("config.cfg");
+            writable.setString("psp1secret", _secretCode);
+            writable.write();
+        } catch (...) {
+            Log::GetInstance()->addMessage(
+                    "Could not persist psp1secret to config.cfg; will regenerate next run",
+                    Log::WARNING);
+        }
+    }
+
+    // Permanent-list walker page. Defaults to 23 (the currently active page as
+    // of 2026-04-11). Advancing happens in permanentFetcherTask.
+    _permanentPage = static_cast<unsigned int>(config.getInteger("psp1permanentpage", 23));
 }
 
 /**
- * Starts the keep alive thread
+ * Starts the background threads. One keepalive thread (pings the server every
+ * 20 min), one fetcher thread (walks /permanent/<page>.json and probes /list).
  */
 void mctrivia::start() {
     if (!_keepRunning.load()) {
         _keepRunning.store(true);
         _keepAliveThread = std::thread(&mctrivia::keepAliveTask, this);
     }
-}
-
-/**
- * Stops the keep alive thread
- */
-void mctrivia::stop() {
-    _keepRunning.store(false);
-    if (_keepAliveThread.joinable()) {
-        _keepAliveThread.join();
+    if (!_fetcherRunning.load()) {
+        _fetcherRunning.store(true);
+        _permanentFetcherThread = std::thread(&mctrivia::permanentFetcherTask, this);
     }
 }
 
 /**
- * Lets the server know we are sharing data
+ * Stops the background threads.
+ */
+void mctrivia::stop() {
+    _keepRunning.store(false);
+    _fetcherRunning.store(false);
+    if (_keepAliveThread.joinable()) {
+        _keepAliveThread.join();
+    }
+    if (_permanentFetcherThread.joinable()) {
+        _permanentFetcherThread.join();
+    }
+}
+
+/**
+ * Lets the server know we are sharing data. The /keepalive endpoint always
+ * echoes "unsubscribe failed will time out anyways" regardless of state — it's
+ * an activity ping and nothing more. We still call it to remain visible on the
+ * public node map.
  */
 void mctrivia::keepAliveTask() {
     Log* log = Log::GetInstance();
@@ -155,64 +199,262 @@ void mctrivia::keepAliveTask() {
             log->addMessage("PSP keepalive task: unknown exception", Log::WARNING);
         }
 
-        //sleep for 20 minutes
-        std::this_thread::sleep_for(std::chrono::minutes(20));
+        //sleep for 20 minutes, but wake up periodically so shutdown is responsive
+        for (int i = 0; i < 120 && _keepRunning.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
     }
 }
 
 /**
- * Determines if a transaction is part of PSP and encodes needed data for processing the meta data
- * "" means not part of pool
- * ,: are not allowed in return string
+ * Walks the /permanent/<page>.json list and pins every CID to IPFS. When a
+ * page reports `done: true`, advances to the next page and persists progress
+ * to config.cfg so restarts don't re-walk from scratch.
+ *
+ * This is the one piece of mctrivia's protocol that works server-side today.
+ * It's the real "what should this node pin" signal. No payments flow from it
+ * currently (the /list/<floor>.json registration endpoint has been returning
+ * HTTP 500 since ~July 2024), but the pinning itself is useful work.
  */
-string mctrivia::serializeMetaProcessor(const DigiByteTransaction& tx) {
-    //check if known bad asset
-    const string assetId = tx.getIssuedAsset().getAssetId();
-    if (isAssetBad(assetId)) return "";
+void mctrivia::permanentFetcherTask() {
+    Log* log = Log::GetInstance();
+    log->addMessage("PSP permanent fetcher thread started (page=" +
+                    std::to_string(_permanentPage) + ")",
+                    Log::INFO);
 
-    //pool pay in address list
-    uint64_t dgb = 0;
-    const std::set<std::string> addresses = {
-            "dgb1q84h0g4lpy0prppc2507wf7ngne26thza0sntgr",
-            "dgb1q8c6p9nht8055lr5fczcvc4v29hunluqv3n3gaf",
-            "dgb1qatvzudt2jey06kx8zn3a6p0nw689s9dxkjp57g", // FIX: missing comma in upstream concatenated this with next line
-            "dgb1qfc9029kc8ptvqt2nuqe4sxtps2nd83kq7pugtm",
-            "dgb1qhucf64cleqdme9637vukgxau8aflpk00thlq98",
-            "dgb1qj4glly6ka7py8pkdme9t0vh77s0gym0vq2esee",
-            "dgb1qjnzadu643tsfzjqjydnh06s9lgzp3m4sg3j68x",
-            "dgb1qkqggn9y85tlyxdfhg9ls3ygph4nd58j0acnlz6",
-            "dgb1qm4putt429lu9mlc6ypukky0fq3q9spm7pjwcy8",
-            "dgb1qnseslpvugsxcnvmz7m4emvmlgeryg80ujduspw",
-            "dgb1qnynkfl44ztsw3et6rq9yhxmefrcm8ufd3afm3e",
-            "dgb1qva97ew3zdwyadm5aqstqxe6xzzgxmxm7d6m3uw",
-            "dgb1qxhx0ahcmuxxmlwvnkjdq6dhmnem570g587m7hk",
-            "dgb1qylaqaen0jqs2sk7jlc74yarw5lg4nzwtac9vyp"};
+    int probeCounter = 0;
 
-    //go through outputs and add up what was sent to above addresses
-    for (unsigned int i = 0; i < tx.getOutputCount(); i++) {
-        AssetUTXO output = tx.getOutput(i);
-        if (addresses.find(output.address) != addresses.end()) {
-            dgb += output.digibyte;
+    while (_fetcherRunning.load()) {
+        // Fetch current page. If `done` comes back true, advance and persist.
+        try {
+            bool done = fetchAndPinPermanentPage(_permanentPage);
+            if (done) {
+                _permanentPage++;
+                try {
+                    Config writable("config.cfg");
+                    writable.setInteger("psp1permanentpage", static_cast<int>(_permanentPage));
+                    writable.write();
+                } catch (...) {
+                    // Non-fatal — worst case we re-walk the page next restart.
+                }
+                log->addMessage("PSP permanent page " +
+                                std::to_string(_permanentPage - 1) +
+                                " complete, advancing to " +
+                                std::to_string(_permanentPage),
+                                Log::INFO);
+            }
+        } catch (const std::exception& e) {
+            log->addMessage(std::string("PSP permanent fetch exception: ") + e.what(),
+                            Log::WARNING);
+            std::lock_guard<std::mutex> lk(_healthMutex);
+            _permanentFetchHealth = Health::Broken;
+        }
+
+        // Probe the /list endpoint once per 3 iterations (~30 min). Purely
+        // diagnostic — the server has been 500ing on it since the pool stopped
+        // paying, but if it ever starts working again the dashboard will flip
+        // to green without a client update. Wrapped in its own try/catch so a
+        // transport error can never take down the fetcher thread.
+        if ((probeCounter % 3) == 0) {
+            try {
+                probeListEndpoint();
+            } catch (const std::exception& e) {
+                log->addMessage(std::string("PSP /list probe exception: ") + e.what(),
+                                Log::DEBUG);
+            } catch (...) {
+                log->addMessage("PSP /list probe unknown exception", Log::DEBUG);
+            }
+        }
+        probeCounter++;
+
+        // Sleep ~10 minutes between iterations, checking stop flag every 10s.
+        for (int i = 0; i < 60 && _fetcherRunning.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
+    }
+}
+
+/**
+ * Returns true if the page came back with `done: true`, meaning the caller
+ * should advance to the next page. False otherwise (page still growing, or
+ * fetch failed — either way, don't advance).
+ */
+bool mctrivia::fetchAndPinPermanentPage(unsigned int page) {
+    Log* log = Log::GetInstance();
+    const std::string url = MCTRIVIA_BASE + "/permanent/" + std::to_string(page) + ".json";
+
+    std::string body;
+    try {
+        body = CurlHandler::get(url, 30000);
+    } catch (const std::exception& e) {
+        log->addMessage("PSP permanent GET failed (" + url + "): " + e.what(),
+                        Log::WARNING);
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _permanentFetchHealth = Health::Broken;
+        return false;
+    }
+
+    Json::Value root;
+    Json::Reader reader;
+    if (!reader.parse(body, root)) {
+        log->addMessage("PSP permanent page " + std::to_string(page) +
+                        " returned non-JSON (len=" + std::to_string(body.size()) + ")",
+                        Log::WARNING);
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _permanentFetchHealth = Health::Broken;
+        return false;
+    }
+
+    // Server error envelope: {"error":"..."}. Means the page doesn't exist yet
+    // on the server (walker advanced past the frontier). Do NOT roll back —
+    // the previous page is already `done:true` and rolling back would make us
+    // re-pin its entire CID list on every iteration in a loop. Instead, stay
+    // at this page and retry next iteration; the server will eventually start
+    // populating it.
+    if (root.isMember("error")) {
+        log->addMessage("PSP permanent page " + std::to_string(page) +
+                        " not ready on server: " + root["error"].asString(),
+                        Log::DEBUG);
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _permanentFetchHealth = Health::Broken;
+        return false;
+    }
+
+    // Extract daily payout counter if present (display-only; surfaces in dashboard).
+    if (root.isMember("daily") && root["daily"].isString()) {
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _daily = root["daily"].asString();
+    }
+
+    // Walk the changes map. Each key is "<assetId>-<txhash>", value is a list
+    // of CIDs that belong to that asset. Pin every CID via the local IPFS node.
+    // Use the null-safe accessor in case we raced shutdown.
+    IPFS* ipfs = AppMain::GetInstance()->getIPFSIfSet();
+    if (!ipfs) {
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _permanentFetchHealth = Health::Broken;
+        return false;
+    }
+    unsigned int pinAttempts = 0;
+    unsigned int pinFailures = 0;
+
+    if (root.isMember("changes") && root["changes"].isObject()) {
+        const Json::Value& changes = root["changes"];
+        for (auto it = changes.begin(); it != changes.end(); ++it) {
+            const Json::Value& cidList = *it;
+            if (!cidList.isArray()) continue;
+            for (const auto& cidVal: cidList) {
+                if (!cidVal.isString()) continue;
+                const std::string cid = cidVal.asString();
+                if (cid.empty()) continue;
+                pinAttempts++;
+                try {
+                    ipfs->pin(cid);
+                } catch (...) {
+                    pinFailures++;
+                    // Don't log each failure at INFO — there are 60-100 CIDs
+                    // per page and IPFS can legitimately fail to find some.
+                }
+            }
         }
     }
 
-    //if not paid in to psp return blank
-    if (dgb == 0) return "";
-    if (tx.getHeight() < 12642645) return "";
+    {
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _permanentFetchHealth = Health::Ok;
+    }
 
-    //look up lowest accepted exchange rate
-    Database* db = AppMain::GetInstance()->getDatabase();
-    double exchangeRate = db->getAcceptedExchangeRate(DigiAsset::standardExchangeRates[1], tx.getHeight());
-    uint64_t bytes = ceil(1000000 * dgb / (exchangeRate * 1.2)) + 1; //1.2 is price in US$ per MB, ceil and +1 just in case of rounding error
+    log->addMessage("PSP permanent page " + std::to_string(page) +
+                            " fetched (" + std::to_string(pinAttempts) + " CIDs, " +
+                            std::to_string(pinFailures) + " pin failures)",
+                    Log::DEBUG);
 
-    //return "S_bytes"
-    return "S_" + to_string(bytes);
+    bool done = root.isMember("done") && root["done"].isBool() && root["done"].asBool();
+    return done;
 }
 
 /**
- * Generic function to create a MetaProcessor object for this pool from the serialized Data
- * @param serializedData
- * @return
+ * POSTs to /list/<floor>.json once. Best-effort — the server has been
+ * returning HTTP 500 on this endpoint since payments stopped working, so we
+ * expect failure. We record the result for dashboard display.
+ */
+void mctrivia::probeListEndpoint() {
+    Log* log = Log::GetInstance();
+
+    // Figure out a valid height floor. We use the chain analyzer's current
+    // height if available, otherwise a sensible default.
+    unsigned int height = 23301643;
+    try {
+        DigiByteCore* dgb = AppMain::GetInstance()->getDigiByteCoreIfSet();
+        if (dgb) height = dgb->getBlockCount();
+    } catch (...) {
+        // Use the default — we just want to send a plausible value.
+    }
+    unsigned int floorHeight = (height / 100000) * 100000;
+
+    IPFS* ipfs = AppMain::GetInstance()->getIPFSIfSet();
+    std::string peerId;
+    if (ipfs) {
+        try {
+            peerId = ipfs->getPeerId();
+        } catch (...) {}
+    }
+
+    // Build minimal JSON body matching digiassetX/digiasset_node syncer.js shape.
+    std::ostringstream body;
+    body << "{\"height\":" << (height + 1)
+         << ",\"version\":5"
+         << ",\"show\":true";
+    if (!peerId.empty()) {
+        body << ",\"peerId\":\"" << peerId << "\"";
+    }
+    std::string payout = getPayoutAddress();
+    if (!payout.empty()) {
+        body << ",\"payout\":\"" << payout << "\"";
+    }
+    body << "}";
+
+    const std::string url = MCTRIVIA_BASE + "/list/" + std::to_string(floorHeight) + ".json";
+    std::string respBody;
+    long status = 0;
+    try {
+        status = CurlHandler::postJson(url, body.str(), respBody, 15000);
+    } catch (const std::exception& e) {
+        log->addMessage("PSP /list probe transport error: " + std::string(e.what()),
+                        Log::DEBUG);
+        std::lock_guard<std::mutex> lk(_healthMutex);
+        _registrationHealth = Health::Broken;
+        _lastRegistrationProbe = std::chrono::steady_clock::now();
+        return;
+    }
+
+    log->addMessage("PSP /list probe: HTTP " + std::to_string(status) +
+                            " body=" + respBody,
+                    Log::DEBUG);
+
+    std::lock_guard<std::mutex> lk(_healthMutex);
+    if (status >= 200 && status < 300) {
+        _registrationHealth = Health::Ok;
+    } else {
+        _registrationHealth = Health::Broken;
+    }
+    _lastRegistrationProbe = std::chrono::steady_clock::now();
+}
+
+/**
+ * Dead code: the 14 hard-coded pay-in addresses and the bytes-paid math were
+ * an attempt to implement a fee-matching PSP protocol that was never actually
+ * deployed server-side. No transaction on-chain has ever paid those addresses.
+ * Returning "" means this pool never claims any issuance — which is correct:
+ * real asset-to-pool matching happens via the /permanent/<page>.json list
+ * fetched by the background thread, not via on-chain output scanning.
+ */
+string mctrivia::serializeMetaProcessor(const DigiByteTransaction& /*tx*/) {
+    return "";
+}
+
+/**
+ * Stub. Never reached because serializeMetaProcessor always returns "".
  */
 unique_ptr<PermanentStoragePoolMetaProcessor> mctrivia::deserializeMetaProcessor(const string& serializedData) {
     return unique_ptr<PermanentStoragePoolMetaProcessor>(new mctriviaMetaProcessor(serializedData, _poolIndex));
@@ -245,7 +487,7 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     string peerId = ipfs->getPeerId();
     // Note: getPeerId() returns a full multiaddress like /ip4/X/tcp/Y/p2p/12D3Koo...
     // The server expects this format (matches upstream Linux behavior).
-    string url = "https://ipfs.digiassetx.com/" + commandStr;
+    string url = MCTRIVIA_BASE + "/" + commandStr;
     if (!extra.empty()) url += "/" + extra;
 
     // Diagnostic detail at DEBUG level only — visible after pressing [L] in the
@@ -314,7 +556,7 @@ void mctrivia::_reportAssetBad(const std::string& assetId) {
 void mctrivia::updateBadList() {
     try {
         //make curl request
-        const string url = "https://ipfs.digiassetx.com/bad.json";
+        const string url = MCTRIVIA_BASE + "/bad.json";
         string readBuffer = CurlHandler::get(url);
 
         //convert to json object
@@ -322,24 +564,24 @@ void mctrivia::updateBadList() {
         Json::Reader reader;
         if (!reader.parse(readBuffer, root)) return;
 
-        //save bad assets
+        //save bad assets. Upstream had an unconditional second push_back after
+        //this loop body that caused _badAssets to grow unbounded on every poll.
+        //Now: only push if we haven't seen it before, same as _badFiles should do.
         for (const Json::Value& value: root["assets"]) {
             string assetId = value.asString();
             if (find(_badAssets.begin(), _badAssets.end(), assetId) == _badAssets.end()) {
                 reportAssetBad(assetId, true);
                 _badAssets.push_back(assetId);
             }
-            _badAssets.push_back(value.asString());
         }
 
-        //save bad files
+        //save bad files (same fix as above)
         for (const Json::Value& value: root["cids"]) {
-            string assetId = value.asString();
-            if (find(_badFiles.begin(), _badFiles.end(), assetId) == _badFiles.end()) {
-                reportFileBad(assetId, true);
-                _badFiles.push_back(assetId);
+            string cid = value.asString();
+            if (find(_badFiles.begin(), _badFiles.end(), cid) == _badFiles.end()) {
+                reportFileBad(cid, true);
+                _badFiles.push_back(cid);
             }
-            _badFiles.push_back(value.asString());
         }
 
         //update bad list time
@@ -358,24 +600,26 @@ void mctrivia::_reportFileBad(const string& cid) {
     }
 }
 
-mctriviaMetaProcessor::mctriviaMetaProcessor(const string& serializedData, unsigned int poolIndex) : PermanentStoragePoolMetaProcessor(poolIndex) {
-    //store pool Index
-    _poolIndex = poolIndex;
-
-    //for now first 2 bytes are always "S-" so just skip them
-    _spaceLeft = stoull(serializedData.substr(2));
+mctrivia::Health mctrivia::getRegistrationHealth() {
+    std::lock_guard<std::mutex> lk(_healthMutex);
+    return _registrationHealth;
+}
+mctrivia::Health mctrivia::getPermanentFetchHealth() {
+    std::lock_guard<std::mutex> lk(_healthMutex);
+    return _permanentFetchHealth;
+}
+std::string mctrivia::getDailyPayoutStr() {
+    std::lock_guard<std::mutex> lk(_healthMutex);
+    return _daily;
 }
 
-bool mctriviaMetaProcessor::_shouldPinFile(const std::string& name, const std::string& mimeType, const std::string& cid) {
-    IPFS* ipfs = AppMain::GetInstance()->getIPFS();
-    try {
-        unsigned int size = ipfs->getSize(cid);
-        if (size <= _spaceLeft) {
-            _spaceLeft -= size;
-            return true;
-        }
-    } catch (...) {
-        // Can't get size (CID lost, IPFS error, etc.) — skip this file
-    }
+// Stub metadata processor — never actually reached because the concrete
+// mctrivia::serializeMetaProcessor returns "" unconditionally. Kept so the
+// abstract base class can still be concretely satisfied at link time.
+mctriviaMetaProcessor::mctriviaMetaProcessor(const string& /*serializedData*/, unsigned int poolIndex) : PermanentStoragePoolMetaProcessor(poolIndex) {
+    _poolIndex = poolIndex;
+}
+
+bool mctriviaMetaProcessor::_shouldPinFile(const std::string& /*name*/, const std::string& /*mimeType*/, const std::string& /*cid*/) {
     return false;
 }

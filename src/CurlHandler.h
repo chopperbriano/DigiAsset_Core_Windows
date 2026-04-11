@@ -16,6 +16,9 @@ namespace CurlHandler {
 
     std::string get(const std::string& url, unsigned int timeout = 0);
     std::string post(const std::string& url, const std::map<std::string, std::string>& data = {}, unsigned int timeout = 0);
+    // Raw JSON POST. Returns the HTTP status code via statusCode, body via responseBody.
+    // Throws on transport/network errors only; non-2xx is NOT an exception.
+    long postJson(const std::string& url, const std::string& body, std::string& responseBody, unsigned int timeout = 0);
     void getDownload(const std::string& url, const std::string& fileName, unsigned int timeout = 0);
     void postDownload(const std::string& url, const std::string& fileName, const std::map<std::string, std::string>& data = {}, unsigned int timeout = 0);
 

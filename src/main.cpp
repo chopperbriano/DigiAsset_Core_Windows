@@ -218,6 +218,14 @@ int main() {
         log->addMessage("Starting Permanent Storage Pool handler");
         psp = new PermanentStoragePoolList("config.cfg");
         main->setPermanentStoragePoolList(psp);
+        // One-shot plain-English explanation of the current PSP reality, so a
+        // first-time Windows user reading the log understands what their node
+        // is actually doing and why no DGB is showing up.
+        log->addMessage("PSP info: this node is storing DigiAsset pool files for the network.");
+        log->addMessage("PSP info: payments from mctrivia's pool are currently unavailable - the");
+        log->addMessage("PSP info: pool operator's payment service is offline and operator is");
+        log->addMessage("PSP info: unreachable. Your node is still contributing useful storage");
+        log->addMessage("PSP info: to the DigiByte ecosystem.");
     } catch (const DigiByteException& e) {
         log->addMessage("Error PSP payout address not set and couldn't auto create one", Log::CRITICAL);
         return 0;

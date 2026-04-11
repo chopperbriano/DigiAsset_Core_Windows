@@ -9,9 +9,24 @@
 
 #include "PermanentStoragePool/PermanentStoragePool.h"
 #include "utils.h"
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 
 class mctrivia : public PermanentStoragePool {
+public:
+    // Reflects what we actually know about mctrivia's server today. The
+    // historical C++ code assumed an on-chain fee-matching pool protocol that
+    // was never deployed server-side — see memory/project_psp_payment_diagnosis.md
+    // for the full story. These values are what the dashboard and logs report.
+    enum class Health {
+        Unknown = 0, // not probed yet this session
+        Ok      = 1, // last probe returned 2xx
+        Broken  = 2  // last probe returned 5xx or threw
+    };
+
 private:
     enum ServerCalls {
         KEEP_ALIVE,
@@ -19,10 +34,33 @@ private:
         REPORT
     };
 
+    // Keepalive thread (existing).
     std::thread _keepAliveThread;
     std::atomic<bool> _keepRunning;
-    std::string _secretCode = utils::generateRandom(8, utils::CodeType::ALPHANUMERIC);
+
+    // Permanent-list fetcher thread. Walks /permanent/<page>.json, pins every
+    // CID via IPFS, and opportunistically probes /list/<floor>.json to report
+    // pool registration health in the dashboard.
+    std::thread _permanentFetcherThread;
+    std::atomic<bool> _fetcherRunning;
+
+    // Persistent identity. Read from config key `psp1secret`; generated and
+    // written back to config.cfg on first run. Previously regenerated every
+    // startup, which made the node look like a new identity on every restart.
+    std::string _secretCode;
+
+    // Permanent-list walker state.
+    unsigned int _permanentPage = 23; // default to current active page on fresh install
+    std::mutex _healthMutex;
+    Health _registrationHealth = Health::Unknown;   // /list/<floor>.json POST
+    Health _permanentFetchHealth = Health::Unknown; // /permanent/<page>.json GET
+    std::string _daily;                             // "daily" field from /permanent response
+    std::chrono::steady_clock::time_point _lastRegistrationProbe{};
+
     void keepAliveTask();
+    void permanentFetcherTask();
+    void probeListEndpoint(); // POST /list/<floor>.json once, update _registrationHealth
+    bool fetchAndPinPermanentPage(unsigned int page); // returns true if page was `done`
     void updateBadList();
     void _callServer(ServerCalls command, const std::string& extra = "");
 
@@ -40,8 +78,8 @@ public:
     mctrivia();
 
     //called by Node Operators that subscribe to PSP
-    std::string serializeMetaProcessor(const DigiByteTransaction& tx) override;                                              //if tx is part of PSP returns serialized data for processing metadata if not returns empty
-    std::unique_ptr<PermanentStoragePoolMetaProcessor> deserializeMetaProcessor(const std::string& serializedData) override; //create object for processing what should be pinned
+    std::string serializeMetaProcessor(const DigiByteTransaction& tx) override;                                              //always returns "" — see .cpp for why
+    std::unique_ptr<PermanentStoragePoolMetaProcessor> deserializeMetaProcessor(const std::string& serializedData) override; //stub processor; never actually invoked
     void start() override;
     void stop() override;
 
@@ -54,15 +92,23 @@ public:
     std::string getName() override;                           //gets the name of the PSP
     std::string getDescription() override;                    //gets the description
     std::string getURL() override;                            //gets the PSP's website
+
+    //called by dashboard / anyone curious about pool state
+    Health getRegistrationHealth();
+    Health getPermanentFetchHealth();
+    std::string getDailyPayoutStr();
+    // No getPermanentPage() — only the fetcher thread touches _permanentPage,
+    // and exposing it to other threads would require synchronization for no
+    // user-visible benefit today.
 };
 
+// Stub metadata processor. The old mctriviaMetaProcessor used serialized-byte
+// budgets produced by the dead on-chain serializer path; it is never reached
+// now that serializeMetaProcessor always returns "".
 class mctriviaMetaProcessor : public PermanentStoragePoolMetaProcessor {
-private:
-    uint64_t _spaceLeft = 0;
-
 public:
     mctriviaMetaProcessor(const std::string& serializedData, unsigned int poolIndex);
-    bool _shouldPinFile(const std::string& name, const std::string& mimeType, const std::string& cid) override; //called for each file included in asset returns if file should be pinned
+    bool _shouldPinFile(const std::string& name, const std::string& mimeType, const std::string& cid) override;
 };
 
 

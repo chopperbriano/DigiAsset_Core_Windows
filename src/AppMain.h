@@ -79,6 +79,7 @@ public:
     ChainAnalyzer* getChainAnalyzerIfSet() { return _analyzer; }
     RPC::Server* getRpcServerIfSet() { return _rpcServer; }
     WebServer* getWebServerIfSet() { return _webServer; }
+    PermanentStoragePoolList* getPermanentStoragePoolListIfSet() { return _psp; }
 
     void reset();
 };

@@ -102,6 +102,42 @@ namespace CurlHandler {
         return readBuffer;
     }
 
+    long postJson(const string& url, const string& body, string& responseBody, unsigned int timeout) {
+        CURL* curl = acquireHandle();
+        if (!curl) {
+            throw runtime_error("Failed to initialize CURL");
+        }
+
+        responseBody.clear();
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long) body.size());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+
+        CURLcode res = curl_easy_perform(curl);
+        long statusCode = 0;
+        if (res == CURLE_OK) {
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statusCode);
+        }
+
+        // curl_easy_reset on next acquireHandle() clears the header pointer from
+        // the handle, but we still own the list here and must free it explicitly.
+        curl_slist_free_all(headers);
+
+        if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
+        if (res != CURLE_OK) {
+            throw runtime_error(curl_easy_strerror(res));
+        }
+        return statusCode;
+    }
+
     void getDownload(const string& url, const string& fileName, unsigned int timeout) {
         CURL* curl = acquireHandle();
         if (!curl) {

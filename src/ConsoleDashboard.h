@@ -73,7 +73,11 @@ private:
     bool _payoutLoaded = false;
     void loadPayoutInfo();
 
-    // PSP pool status (refreshed every 10 minutes)
+    // PSP pool status (refreshed every 10 minutes). checkPspRegistration()
+    // runs on a detached background thread, so every touch of these fields
+    // must hold _pspStatusMutex — otherwise render() races against the write
+    // inside the background thread and we get undefined behavior on std::string.
+    std::mutex _pspStatusMutex;
     std::string _pspStatus;
     int _pspNodeCount = 0;
     std::chrono::steady_clock::time_point _lastPspCheck;

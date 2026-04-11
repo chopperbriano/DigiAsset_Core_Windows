@@ -16,6 +16,8 @@ Config::Config() {
 
 void Config::clear() {
     _values.clear();
+    _rawLines.clear();
+    _keyToLineIndex.clear();
 }
 
 void Config::refresh() {
@@ -27,17 +29,26 @@ void Config::refresh() {
     myfile.open(_fileName);
     if (myfile.fail()) throw exceptionConfigFileMissing(); //does not exist
 
-    //check lines and save to correct value
+    //read every line in order (preserving comments and blank lines), and for
+    //each `key=value` line also populate the parsed map and the index lookup.
     string line;
     while (getline(myfile, line)) {
+        // Strip trailing \r so CRLF-terminated files don't accumulate a \r per
+        // line on the next write.
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t idx = _rawLines.size();
+        _rawLines.push_back(line);
+
+        if (line.empty()) continue;     //blank line - keep in _rawLines, skip parse
+        if (line[0] == '#') continue;   //comment - keep in _rawLines, skip parse
+
         istringstream is_line(line);
-        if (line.empty()) continue;   //ignore blank lines
-        if (line[0] == '#') continue; //ignore notes
         string key;
         if (getline(is_line, key, '=')) {
             string value;
             if (getline(is_line, value)) {
                 _values[key] = value;
+                _keyToLineIndex[key] = idx;
             }
         }
     }
@@ -47,14 +58,27 @@ void Config::refresh() {
 /**
  * writes the config contents to a file.  If name not set will write over existign config file
  * @param fileName
+ *
+ * Writes _rawLines verbatim so comments, blank lines, and original ordering
+ * are preserved. setString/setInteger/setBool update BOTH _values and the
+ * corresponding entry in _rawLines, so the raw-lines view is authoritative.
  */
 void Config::write(string fileName) const {
     if (fileName.empty()) fileName = _fileName;
 
     ofstream myfile(fileName);
     if (!myfile.is_open()) throw exceptionConfigFileCouldNotBeWritten();
-    for (const auto& pair: _values) {
-        myfile << pair.first << "=" << pair.second << "\n";
+
+    if (_rawLines.empty()) {
+        // Fallback path — Config was constructed via the default ctor with no
+        // file, or refresh() was never called. Dump _values as before.
+        for (const auto& pair: _values) {
+            myfile << pair.first << "=" << pair.second << "\n";
+        }
+    } else {
+        for (const auto& line: _rawLines) {
+            myfile << line << "\n";
+        }
     }
     myfile.close();
 }
@@ -217,10 +241,22 @@ map<string, bool> Config::getBoolMap(const string& keyPrefix) const {
 
 void Config::setString(const string& key, const string& value) {
     _values[key] = value;
+
+    // Keep the raw-line view in sync. If the key was already in the file,
+    // update its existing line in place (preserving position relative to
+    // comments and other keys). If it's new, append a fresh line.
+    const string newLine = key + "=" + value;
+    auto it = _keyToLineIndex.find(key);
+    if (it != _keyToLineIndex.end()) {
+        _rawLines[it->second] = newLine;
+    } else {
+        _keyToLineIndex[key] = _rawLines.size();
+        _rawLines.push_back(newLine);
+    }
 }
 
 void Config::setInteger(const string& key, int value) {
-    _values[key] = to_string(value);
+    setString(key, to_string(value));
 }
 
 void Config::setBool(const string& key, bool value) {
@@ -229,18 +265,18 @@ void Config::setBool(const string& key, bool value) {
 
 void Config::setStringMap(const string& key, const map<string, string>& values) {
     for (const auto& entry: values) {
-        _values[key + entry.first] = entry.second;
+        setString(key + entry.first, entry.second);
     }
 }
 
 void Config::setIntegerMap(const string& key, const map<string, int>& values) {
     for (const auto& entry: values) {
-        _values[key + entry.first] = to_string(entry.second);
+        setString(key + entry.first, to_string(entry.second));
     }
 }
 
 void Config::setBoolMap(const string& key, const map<string, bool>& values) {
     for (const auto& entry: values) {
-        _values[key + entry.first] = to_string(entry.second);
+        setString(key + entry.first, to_string(entry.second));
     }
 }

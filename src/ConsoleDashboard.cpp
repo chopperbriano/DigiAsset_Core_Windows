@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "CurlHandler.h"
 #include "Log.h"
+#include "PermanentStoragePool/pools/mctrivia.h"
 #include "Version.h"
 #include <iostream>
 #include <sstream>
@@ -250,8 +251,11 @@ void ConsoleDashboard::render() {
 
     // Payout balance
     loadPayoutInfo();
-    // Run registration check in background to avoid blocking render
+    // Run registration check in background to avoid blocking render.
+    // Snapshot the elapsed-time decision under the PSP status lock so we don't
+    // race against checkPspRegistration()'s writes.
     {
+        std::lock_guard<std::mutex> lock(_pspStatusMutex);
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration<double>(now - _lastPspCheck).count();
         if (elapsed >= 600.0 || _pspStatus.empty()) {
@@ -369,21 +373,28 @@ void ConsoleDashboard::render() {
     // RPC::Server that becomes dangling if the detached accept-loop thread
     // dies, so trusting getRpcServerIfSet() can show a stale port for a
     // service that isn't actually listening.
+    //
+    // Probe cadence is state-dependent: the first render of the dashboard
+    // happens on main thread at ConsoleDashboard::start(), ~1s BEFORE main.cpp
+    // constructs RPC::Server. If we probed once and slept 30s, the user would
+    // stare at "Off" for 30s after a fresh start even though the server came
+    // up within the first second. So: if we haven't found it yet, re-probe
+    // every 2s. Only stretch to 30s once we've seen a positive result.
     // Update _lastRpcProbe BEFORE spawning, otherwise every render in the
     // ~1ms window before the probe thread finishes will spawn a duplicate.
-    {
-        std::lock_guard<std::mutex> lock(_rpcProbeMutex);
-        auto rnow = std::chrono::steady_clock::now();
-        auto rElapsed = std::chrono::duration<double>(rnow - _lastRpcProbe).count();
-        if (rElapsed >= 30.0 || !_rpcProbed) {
-            _lastRpcProbe = rnow;
-            std::thread([this]() { probeRpcServer(); }).detach();
-        }
-    }
+    bool rpcProbed;
     bool rpcOnline;
     unsigned int rpcPort;
     {
         std::lock_guard<std::mutex> lock(_rpcProbeMutex);
+        auto rnow = std::chrono::steady_clock::now();
+        auto rElapsed = std::chrono::duration<double>(rnow - _lastRpcProbe).count();
+        double probeInterval = _rpcListening ? 30.0 : 2.0;
+        if (rElapsed >= probeInterval || !_rpcProbed) {
+            _lastRpcProbe = rnow;
+            std::thread([this]() { probeRpcServer(); }).detach();
+        }
+        rpcProbed = _rpcProbed;
         rpcOnline = _rpcListening;
         rpcPort = _rpcProbedPort;
     }
@@ -450,12 +461,26 @@ void ConsoleDashboard::render() {
 
     // Row: IPFS | RPC Server
     {
-        std::string rpcVal = rpcOnline ? ("Port " + std::to_string(rpcPort)) : std::string("Off");
+        // Tri-state: not-probed-yet (Checking, cyan), probed-and-off (Off, red),
+        // probed-and-listening (Port N, green). Without the "not probed yet"
+        // case, the first render on a fresh start shows a red "Off" because the
+        // probe spawned but hasn't completed yet.
+        std::string rpcVal;
+        const char* rpcColor;
+        if (!rpcProbed) {
+            rpcVal = "Checking...";
+            rpcColor = FG_CYAN;
+        } else if (rpcOnline) {
+            rpcVal = "Port " + std::to_string(rpcPort);
+            rpcColor = FG_GREEN;
+        } else {
+            rpcVal = "Off";
+            rpcColor = FG_RED;
+        }
         out << ERASE_LINE << "  "
             << cell("IPFS", ipfsOnline ? "Connected" : "N/A",
                     ipfsOnline ? FG_GREEN : FG_YELLOW, COL1_LABEL_W, COL1_VALUE_W)
-            << cell("RPC Server", rpcVal,
-                    rpcOnline ? FG_GREEN : FG_RED, COL2_LABEL_W, 0)
+            << cell("RPC Server", rpcVal, rpcColor, COL2_LABEL_W, 0)
             << "\n"; totalRows++;
     }
 
@@ -495,21 +520,102 @@ void ConsoleDashboard::render() {
             << "\n"; totalRows++;
     }
 
-    // Row: PSP Pool status (with optional Network: N nodes appended)
-    if (!_pspStatus.empty()) {
-        std::string lp = std::string("PSP Pool:") + std::string(COL1_LABEL_W - 9, ' ');
-        out << ERASE_LINE << "  " << lp;
-        if (_pspStatus.find("reachable") != std::string::npos &&
-            _pspStatus.find("unreachable") == std::string::npos) {
-            out << FG_GREEN << _pspStatus << RESET;
-        } else {
-            out << FG_YELLOW << _pspStatus << RESET;
+    // Row: PSP Pool status.
+    //
+    // This pulls from THREE independent signals now, not one:
+    //   1. map.json fetch succeeds  -> server is up on the static-file side
+    //   2. mctrivia::getPermanentFetchHealth()  -> /permanent/<page>.json works,
+    //      we're actively pinning canonical content for the pool
+    //   3. mctrivia::getRegistrationHealth()    -> /list/<floor>.json POST works,
+    //      meaning payout registration would succeed. This has been returning
+    //      HTTP 500 on mctrivia's server since ~July 2024 and the pool operator
+    //      is uncontactable, so the Ok branch is primarily future-proofing.
+    //
+    // See memory/project_psp_payment_diagnosis.md for the full story.
+    {
+        // Null-safe: render() runs once on main thread during ConsoleDashboard::start()
+        // BEFORE main.cpp's PSP list construction, so we MUST tolerate a null list here.
+        auto* pspList = AppMain::GetInstance()->getPermanentStoragePoolListIfSet();
+        auto* poolBase = pspList ? pspList->getPool(1) : nullptr;
+        auto* pool = dynamic_cast<mctrivia*>(poolBase);
+
+        // Read the mctrivia pool's health signals ONCE per render. Each getter
+        // takes the health mutex; reading twice would double the lock overhead
+        // and risk rendering two inconsistent states if the fetcher thread
+        // mutates between reads.
+        mctrivia::Health permHealth = mctrivia::Health::Unknown;
+        mctrivia::Health regHealth = mctrivia::Health::Unknown;
+        if (pool) {
+            permHealth = pool->getPermanentFetchHealth();
+            regHealth = pool->getRegistrationHealth();
         }
-        if (_pspNodeCount > 0) {
-            out << "    Network: " << FG_BRIGHT_WHITE << _pspNodeCount
+
+        // Snapshot the server-up signal + node count under the lock. The
+        // background checkPspRegistration() thread writes _pspStatus and
+        // _pspNodeCount, so naked reads here would race.
+        bool serverUp;
+        int pspNodeCountSnapshot;
+        {
+            std::lock_guard<std::mutex> lock(_pspStatusMutex);
+            serverUp = !_pspStatus.empty() && _pspStatus.find("unreachable") == std::string::npos;
+            pspNodeCountSnapshot = _pspNodeCount;
+        }
+
+        // Compose the main status line. Wording deliberately avoids jargon
+        // ("pinning", "/list", HTTP codes) — a Windows user running this exe
+        // should be able to read it and understand whether they're doing
+        // something useful and whether they're getting paid.
+        std::string statusText;
+        const char* statusColor = FG_YELLOW;
+
+        if (!serverUp) {
+            statusText = "Pool unreachable";
+            statusColor = FG_RED;
+        } else if (!pool) {
+            // Shouldn't happen in practice, but degrade gracefully if pool 1 is
+            // disabled or something is miswired in the PSP list.
+            statusText = "Pool reachable";
+            statusColor = FG_GREEN;
+        } else if (permHealth == mctrivia::Health::Ok && regHealth == mctrivia::Health::Ok) {
+            statusText = "Hosting pool files";
+            statusColor = FG_GREEN;
+        } else if (permHealth == mctrivia::Health::Ok) {
+            // Normal current state: we can fetch the canonical list and
+            // pin content, but the payment registration endpoint is broken.
+            statusText = "Hosting pool files (unpaid)";
+            statusColor = FG_YELLOW;
+        } else if (permHealth == mctrivia::Health::Unknown && regHealth == mctrivia::Health::Unknown) {
+            statusText = "Starting up...";
+            statusColor = FG_CYAN;
+        } else {
+            statusText = "Pool degraded";
+            statusColor = FG_YELLOW;
+        }
+
+        std::string lp = std::string("PSP Pool:") + std::string(COL1_LABEL_W - 9, ' ');
+        out << ERASE_LINE << "  " << lp
+            << statusColor << statusText << RESET;
+        if (pspNodeCountSnapshot > 0) {
+            out << "    Network: " << FG_BRIGHT_WHITE << pspNodeCountSnapshot
                 << RESET << DIM << " nodes online" << RESET;
         }
         out << "\n"; totalRows++;
+
+        // Row: Payment. Explicitly tells the user the current economic reality
+        // of running this node so nobody thinks they're accruing DGB silently.
+        if (pool) {
+            std::string lp2 = std::string("Payment:") + std::string(COL1_LABEL_W - 8, ' ');
+            out << ERASE_LINE << "  " << lp2;
+            if (regHealth == mctrivia::Health::Ok) {
+                out << FG_GREEN << "active" << RESET;
+            } else if (regHealth == mctrivia::Health::Broken) {
+                out << FG_RED << "unavailable" << RESET
+                    << DIM << " - pool payment service offline" << RESET;
+            } else {
+                out << DIM << "checking..." << RESET;
+            }
+            out << "\n"; totalRows++;
+        }
     }
 
     // Row: IPFS announce hint (conditional, only when there's actionable info)
@@ -667,49 +773,24 @@ void ConsoleDashboard::render() {
 // ---- RPC server liveness probe ---------------------------------------------
 
 void ConsoleDashboard::probeRpcServer() {
-    // Read the configured port (default 14024 matches RPC::Server::Server)
+    // Trust the pointer in AppMain. main.cpp pins the RPC::Server via a
+    // shared_ptr for the whole program lifetime, and the accept loop catches
+    // all exceptions internally, so the "dangling pointer" concern the
+    // original win.26 TCP-connect probe was guarding against hasn't actually
+    // happened in practice. The TCP probe itself was unreliable: on Windows
+    // localhost, non-blocking connect() returns WSAEWOULDBLOCK and the
+    // follow-up select() wait for writability sometimes times out at 200ms
+    // even though the kernel 3-way handshake has already completed — which
+    // made the dashboard show "Off" for a working RPC server.
+    RPC::Server* server = AppMain::GetInstance()->getRpcServerIfSet();
+    bool listening = (server != nullptr);
+
+    // Read the configured port for display. Default matches RPC::Server::Server.
     unsigned int port = 14024;
     try {
         Config config("config.cfg");
         port = (unsigned int)config.getInteger("rpcassetport", 14024);
     } catch (...) {}
-
-    bool listening = false;
-#ifdef _WIN32
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
-        SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
-        if (s != INVALID_SOCKET) {
-            // Non-blocking + select-with-timeout: short, never hang the dashboard
-            u_long nonblock = 1;
-            ioctlsocket(s, FIONBIO, &nonblock);
-
-            sockaddr_in addr{};
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons((u_short)port);
-            addr.sin_addr.s_addr = htonl(0x7F000001); // 127.0.0.1
-
-            int rc = connect(s, (sockaddr*)&addr, sizeof(addr));
-            if (rc == 0) {
-                listening = true;
-            } else if (WSAGetLastError() == WSAEWOULDBLOCK) {
-                fd_set wfds;
-                FD_ZERO(&wfds);
-                FD_SET(s, &wfds);
-                timeval tv{0, 200000}; // 200 ms
-                int sel = select(0, nullptr, &wfds, nullptr, &tv);
-                if (sel > 0) {
-                    int err = 0;
-                    int errlen = sizeof(err);
-                    getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&err, &errlen);
-                    if (err == 0) listening = true;
-                }
-            }
-            closesocket(s);
-        }
-        WSACleanup();
-    }
-#endif
 
     std::lock_guard<std::mutex> lock(_rpcProbeMutex);
     _rpcListening = listening;
@@ -728,6 +809,9 @@ void ConsoleDashboard::checkPspRegistration() {
     // tell from it is "the pool server is up" and "how many nodes it sees online".
     // Anything stronger (am I registered, am I being paid) requires a per-node
     // endpoint mctrivia hasn't exposed.
+    //
+    // Do the HTTP fetch OUTSIDE the lock so we don't block render() for 5s on a
+    // slow network. Only grab the lock when committing the result.
     try {
         std::string mapResponse = CurlHandler::get("https://ipfs.digiassetx.com/map.json", 5000);
         int nodeCount = 0;
@@ -736,10 +820,12 @@ void ConsoleDashboard::checkPspRegistration() {
             nodeCount++;
             pos++;
         }
+        std::lock_guard<std::mutex> lock(_pspStatusMutex);
         _pspNodeCount = nodeCount;
         _pspStatus = "Pool reachable";
         _lastPspCheck = now; // cache for 10 min
     } catch (...) {
+        std::lock_guard<std::mutex> lock(_pspStatusMutex);
         _pspStatus = "Pool unreachable";
         // don't cache failure — retry next refresh
     }

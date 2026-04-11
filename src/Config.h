@@ -13,6 +13,13 @@ using namespace std;
 
 class Config {
     map<string, string> _values;
+    // _rawLines stores the file's contents in original order, INCLUDING comment
+    // lines (`#...`) and blank lines. _keyToLineIndex maps each known key to
+    // the index in _rawLines where it lives. On setString we update that line
+    // in place instead of rewriting the whole file from _values, so comments
+    // and user-intended ordering survive a write().
+    vector<string> _rawLines;
+    map<string, size_t> _keyToLineIndex;
     string _fileName;
     static bool isInteger(const string& value);
     static bool isBool(const string& value);
