@@ -230,6 +230,22 @@ void PermanentStoragePoolList::processNewMetaData(const DigiByteTransaction& tx,
         extra += ",p" + to_string(pool->getPoolIndex()) + ":" + serialized; //add to instructions
     }
 
+    // DEBUG: surface the detection result so we can tell if serializer found
+    // a matching output. "a:N" alone = no pool matched; "a:N,p1:S_..." = matched.
+    // Also dump the raw outputs at DEBUG so we can see addresses/digibyte
+    // values the serializer saw.
+    {
+        Log* log = Log::GetInstance();
+        log->addMessage("PSP processNewMetaData: assetIdx=" + to_string(assetIndex) +
+                        " extra=" + extra, Log::DEBUG);
+        size_t outCount = tx.getOutputCount();
+        for (size_t i = 0; i < outCount; i++) {
+            AssetUTXO out = tx.getOutput(i);
+            log->addMessage("  out[" + to_string(i) + "] addr='" + out.address +
+                            "' dgb=" + to_string(out.digibyte), Log::DEBUG);
+        }
+    }
+
     //download the metadata
     IPFS* ipfs = AppMain::GetInstance()->getIPFS();
     ipfs->callOnDownload(cid, "", extra, PSP_CALLBACK_NEWMETADATA_ID);
