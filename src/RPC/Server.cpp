@@ -208,9 +208,15 @@ namespace RPC {
                 log->addMessage("RPC call #" + std::to_string(callNumber) + " method: " + method, Log::DEBUG);
                 response = handleRpcRequest(request);
             } catch (const DigiByteException& e) {
-                if (e.getMessage() == "empty") return; // stub accept — no real connection
-                log->addMessage("Expected exception in RPC call #" + std::to_string(callNumber) + ": " + e.getMessage(), Log::DEBUG);
-                response = createErrorResponse(e.getCode(), e.getMessage(), request);
+                // Stub / probe connections: DigiByteException's ctor wraps the
+                // raw message in "Error during parsing of >>...<<" because it
+                // tries to JSON-parse the message, so match on the wrapped
+                // form. Dashboard's RPC liveness probe (TCP connect + close)
+                // produces this on every check.
+                const std::string& em = e.getMessage();
+                if (em == "empty" || em.find(">>empty<<") != std::string::npos) return;
+                log->addMessage("Expected exception in RPC call #" + std::to_string(callNumber) + ": " + em, Log::DEBUG);
+                response = createErrorResponse(e.getCode(), em, request);
                 error = true;
             } catch (const std::exception& e) {
                 log->addMessage("Unexpected exception in RPC call #" + std::to_string(callNumber) + ": " + e.what(), Log::DEBUG);

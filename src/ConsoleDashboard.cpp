@@ -369,10 +369,14 @@ void ConsoleDashboard::render() {
     // RPC::Server that becomes dangling if the detached accept-loop thread
     // dies, so trusting getRpcServerIfSet() can show a stale port for a
     // service that isn't actually listening.
+    // Update _lastRpcProbe BEFORE spawning, otherwise every render in the
+    // ~1ms window before the probe thread finishes will spawn a duplicate.
     {
+        std::lock_guard<std::mutex> lock(_rpcProbeMutex);
         auto rnow = std::chrono::steady_clock::now();
         auto rElapsed = std::chrono::duration<double>(rnow - _lastRpcProbe).count();
         if (rElapsed >= 30.0 || !_rpcProbed) {
+            _lastRpcProbe = rnow;
             std::thread([this]() { probeRpcServer(); }).detach();
         }
     }
