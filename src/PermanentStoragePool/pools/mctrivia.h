@@ -49,6 +49,14 @@ private:
     // startup, which made the node look like a new identity on every restart.
     std::string _secretCode;
 
+    // Base URL for the pool server. Read from config key `psp1server`,
+    // defaults to mctrivia's original server so upstream behavior is
+    // preserved. Users who want to use a different pool (e.g. a local
+    // DigiAssetPoolServer.exe running on the same machine) just set
+    //   psp1server=http://127.0.0.1:14028
+    // in their config.cfg.
+    std::string _baseUrl;
+
     // Permanent-list walker state.
     unsigned int _permanentPage = 23; // default to current active page on fresh install
     std::mutex _healthMutex;
@@ -56,6 +64,14 @@ private:
     Health _permanentFetchHealth = Health::Unknown; // /permanent/<page>.json GET
     std::string _daily;                             // "daily" field from /permanent response
     std::chrono::steady_clock::time_point _lastRegistrationProbe{};
+    // Whether the pool server's last /list response said it is actively
+    // distributing payouts. A pool can be reachable and accept our
+    // registration (_registrationHealth == Ok) but still have payouts
+    // disabled — this is the Phase 1 state of a freshly-started
+    // DigiAssetPoolServer.exe. The dashboard differentiates these so
+    // "Payment: active" only shows up when real DGB is flowing.
+    bool _payoutsEnabled = false;
+    bool _payoutsEnabledKnown = false;
 
     void keepAliveTask();
     void permanentFetcherTask();
@@ -97,6 +113,11 @@ public:
     Health getRegistrationHealth();
     Health getPermanentFetchHealth();
     std::string getDailyPayoutStr();
+    // True if the pool server's /list response said payoutsEnabled=true
+    // AND we've seen at least one /list probe complete. When false, either
+    // the probe hasn't happened yet or the pool is in Phase 1 (registration
+    // accepted, no DGB flowing).
+    bool getPayoutsEnabled();
     // No getPermanentPage() — only the fetcher thread touches _permanentPage,
     // and exposing it to other threads would require synchronization for no
     // user-visible benefit today.

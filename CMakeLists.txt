@@ -40,7 +40,7 @@ SET(PATCH_VERSION 0)
 SET(SO_VERSION    0)
 
 # Windows port build number (increment for each Windows-specific release)
-SET(WIN_BUILD 31)
+SET(WIN_BUILD 32)
 
 # Add source directory
 include_directories(src)
@@ -50,6 +50,12 @@ ADD_SUBDIRECTORY(src)
 if(BUILD_CLI)
     include_directories(cli)
     ADD_SUBDIRECTORY(cli)
+endif()
+
+#create optional pool server (Windows-only for now; depends on real Boost
+# from packages/ and winhttp, so it only makes sense to build on Windows).
+if(WIN32 AND MSVC)
+    ADD_SUBDIRECTORY(pool)
 endif()
 
 #create web

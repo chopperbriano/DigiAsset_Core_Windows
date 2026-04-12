@@ -18,11 +18,11 @@
 using namespace std;
 
 namespace {
-    // Hard-coded base URL. Kept non-configurable for now — the Windows fork is
-    // intentionally a drop-in for mctrivia's upstream setup, not an attempt to
-    // become a new pool operator. If/when a replacement pool is set up, this
-    // becomes a config key.
-    const std::string MCTRIVIA_BASE = "https://ipfs.digiassetx.com";
+    // Default base URL for the pool server. Matches mctrivia's original
+    // so existing users see no change. Override by setting `psp1server` in
+    // config.cfg — e.g. to `http://127.0.0.1:14028` to point at a local
+    // DigiAssetPoolServer.exe instance.
+    const std::string DEFAULT_MCTRIVIA_BASE = "https://ipfs.digiassetx.com";
 }
 
 mctrivia::mctrivia() : _keepRunning(false), _fetcherRunning(false) {}
@@ -36,7 +36,7 @@ string mctrivia::getDescription() {
     return "Originally operated by digiassetX Inc and continued to run by Matthew Cornelisse.  This pool makes sure asset metadata is always available and pays others DigiAsset Core nodes to help distribute the metadata.";
 }
 string mctrivia::getURL() {
-    return MCTRIVIA_BASE;
+    return _baseUrl.empty() ? DEFAULT_MCTRIVIA_BASE : _baseUrl;
 }
 
 /**
@@ -128,6 +128,15 @@ void mctrivia::enable(DigiByteTransaction& tx) {
 }
 void mctrivia::_setConfig(const Config& config) {
     _visible = config.getBool("psp1visible", true);
+
+    // Pool server base URL. Defaults to mctrivia's original so existing
+    // users are unaffected. Set psp1server=http://... in config.cfg to
+    // point at a different pool (e.g. a local DigiAssetPoolServer.exe).
+    _baseUrl = config.getString("psp1server", DEFAULT_MCTRIVIA_BASE);
+    // Strip any trailing slash so later url construction like `_baseUrl +
+    // "/permanent/..."` produces clean paths regardless of how the user
+    // wrote the config value.
+    while (!_baseUrl.empty() && _baseUrl.back() == '/') _baseUrl.pop_back();
 
     // Persistent node identity. Historically this was a fresh random string on
     // every startup — harmless-looking but meant the server saw us as a new
@@ -281,7 +290,7 @@ void mctrivia::permanentFetcherTask() {
  */
 bool mctrivia::fetchAndPinPermanentPage(unsigned int page) {
     Log* log = Log::GetInstance();
-    const std::string url = MCTRIVIA_BASE + "/permanent/" + std::to_string(page) + ".json";
+    const std::string url = _baseUrl + "/permanent/" + std::to_string(page) + ".json";
 
     std::string body;
     try {
@@ -414,7 +423,7 @@ void mctrivia::probeListEndpoint() {
     }
     body << "}";
 
-    const std::string url = MCTRIVIA_BASE + "/list/" + std::to_string(floorHeight) + ".json";
+    const std::string url = _baseUrl + "/list/" + std::to_string(floorHeight) + ".json";
     std::string respBody;
     long status = 0;
     try {
@@ -432,11 +441,31 @@ void mctrivia::probeListEndpoint() {
                             " body=" + respBody,
                     Log::DEBUG);
 
+    // Parse payoutsEnabled out of the response body if present. Our own
+    // pool server returns `{"payoutsEnabled":false,"phase":1,...}` as a
+    // Phase 1 default and `{"payoutsEnabled":true,"phase":3,...}` once the
+    // operator has flipped poolpayouts=1. Mctrivia's legacy server doesn't
+    // include this field at all; absence means "unknown, assume false".
+    bool parsedPayoutsEnabled = false;
+    if (status >= 200 && status < 300) {
+        Json::Value root;
+        Json::Reader reader;
+        if (reader.parse(respBody, root)) {
+            if (root.isMember("payoutsEnabled") && root["payoutsEnabled"].isBool()) {
+                parsedPayoutsEnabled = root["payoutsEnabled"].asBool();
+            }
+        }
+    }
+
     std::lock_guard<std::mutex> lk(_healthMutex);
     if (status >= 200 && status < 300) {
         _registrationHealth = Health::Ok;
+        _payoutsEnabled = parsedPayoutsEnabled;
+        _payoutsEnabledKnown = true;
     } else {
         _registrationHealth = Health::Broken;
+        _payoutsEnabled = false;
+        _payoutsEnabledKnown = false;
     }
     _lastRegistrationProbe = std::chrono::steady_clock::now();
 }
@@ -487,7 +516,7 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     string peerId = ipfs->getPeerId();
     // Note: getPeerId() returns a full multiaddress like /ip4/X/tcp/Y/p2p/12D3Koo...
     // The server expects this format (matches upstream Linux behavior).
-    string url = MCTRIVIA_BASE + "/" + commandStr;
+    string url = _baseUrl + "/" + commandStr;
     if (!extra.empty()) url += "/" + extra;
 
     // Diagnostic detail at DEBUG level only — visible after pressing [L] in the
@@ -525,7 +554,9 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
 
         log->addMessage("PSP keepalive RESPONSE: " + response, Log::DEBUG);
         if (responseOk) {
-            log->addMessage("Reported online to ipfs.digiassetx.com (server id: " +
+            // Use _baseUrl, not the hardcoded ipfs.digiassetx.com, so users
+            // running their own DigiAssetPoolServer see it reflected here.
+            log->addMessage("Reported online to " + _baseUrl + " (server id: " +
                             peerId + ")");
         } else {
             log->addMessage("PSP keepalive returned UNEXPECTED response: " + response,
@@ -556,7 +587,7 @@ void mctrivia::_reportAssetBad(const std::string& assetId) {
 void mctrivia::updateBadList() {
     try {
         //make curl request
-        const string url = MCTRIVIA_BASE + "/bad.json";
+        const string url = _baseUrl + "/bad.json";
         string readBuffer = CurlHandler::get(url);
 
         //convert to json object
@@ -607,6 +638,10 @@ mctrivia::Health mctrivia::getRegistrationHealth() {
 mctrivia::Health mctrivia::getPermanentFetchHealth() {
     std::lock_guard<std::mutex> lk(_healthMutex);
     return _permanentFetchHealth;
+}
+bool mctrivia::getPayoutsEnabled() {
+    std::lock_guard<std::mutex> lk(_healthMutex);
+    return _payoutsEnabledKnown && _payoutsEnabled;
 }
 std::string mctrivia::getDailyPayoutStr() {
     std::lock_guard<std::mutex> lk(_healthMutex);

@@ -281,12 +281,23 @@ void ConsoleDashboard::processInput() {
                     log->addMessage("");
                     log->addMessage("-- PSP Pool / Payment --");
                     log->addMessage("Hosting pool files: your node is pinning (storing) the canonical list of");
-                    log->addMessage("  DigiAsset metadata files mctrivia's server tracks. Other DigiAsset clients can");
+                    log->addMessage("  DigiAsset metadata files the pool server tracks. Other DigiAsset clients can");
                     log->addMessage("  fetch them from you via IPFS. You are contributing storage to the network.");
-                    log->addMessage("Payment unavailable: mctrivia's pool payout server (the part that would send you");
-                    log->addMessage("  DGB for hosting) has been broken since roughly July 2024 and the pool operator");
-                    log->addMessage("  is uncontactable. No client can currently collect payments. Your node will");
-                    log->addMessage("  automatically start receiving DGB if the server is ever fixed.");
+                    log->addMessage("Payment row can show four things:");
+                    log->addMessage("  * 'active' (green) - the pool server said payoutsEnabled=true and DGB is");
+                    log->addMessage("    flowing to your payout address.");
+                    log->addMessage("  * 'registered (no payouts yet)' (yellow) - the pool server accepted your");
+                    log->addMessage("    registration but has NOT enabled payouts yet. This is the expected state");
+                    log->addMessage("    when running against a Phase 1 DigiAssetPoolServer or against a pool whose");
+                    log->addMessage("    operator has not funded / enabled payouts. You are contributing storage but");
+                    log->addMessage("    no DGB is being sent to you.");
+                    log->addMessage("  * 'unavailable' (red) - the pool server's /list endpoint is unreachable or");
+                    log->addMessage("    returning errors. This is what you saw against mctrivia's server, which");
+                    log->addMessage("    has been returning HTTP 500 since ~July 2024.");
+                    log->addMessage("  * 'checking...' (dim) - the first /list probe hasn't completed yet.");
+                    log->addMessage("To use a pool server other than mctrivia's default, set psp1server=<url> in");
+                    log->addMessage("  config.cfg. E.g. psp1server=http://127.0.0.1:14028 to point at a local");
+                    log->addMessage("  DigiAssetPoolServer.exe running on this same machine.");
 
                     // --- Web UI / RPC / Ports ---
                     log->addMessage("");
@@ -677,9 +688,11 @@ void ConsoleDashboard::render() {
         // mutates between reads.
         mctrivia::Health permHealth = mctrivia::Health::Unknown;
         mctrivia::Health regHealth = mctrivia::Health::Unknown;
+        bool payoutsEnabled = false;
         if (pool) {
             permHealth = pool->getPermanentFetchHealth();
             regHealth = pool->getRegistrationHealth();
+            payoutsEnabled = pool->getPayoutsEnabled();
         }
 
         // Snapshot the server-up signal + node count under the lock. The
@@ -735,11 +748,24 @@ void ConsoleDashboard::render() {
 
         // Row: Payment. Explicitly tells the user the current economic reality
         // of running this node so nobody thinks they're accruing DGB silently.
+        //
+        // Four states:
+        //   green  active                       - pool registered AND payoutsEnabled=true
+        //   yellow registered (no payouts yet)  - pool registered, payoutsEnabled=false
+        //                                         (Phase 1 local pool, or legacy server
+        //                                         that doesn't send the field)
+        //   red    unavailable                  - /list probe fails (mctrivia's dead server)
+        //   dim    checking...                  - not probed yet
         if (pool) {
             std::string lp2 = std::string("Payment:") + std::string(COL1_LABEL_W - 8, ' ');
             out << ERASE_LINE << "  " << lp2;
             if (regHealth == mctrivia::Health::Ok) {
-                out << FG_GREEN << "active" << RESET;
+                if (payoutsEnabled) {
+                    out << FG_GREEN << "active" << RESET;
+                } else {
+                    out << FG_YELLOW << "registered (no payouts yet)" << RESET
+                        << DIM << " - pool operator has not enabled payouts" << RESET;
+                }
             } else if (regHealth == mctrivia::Health::Broken) {
                 out << FG_RED << "unavailable" << RESET
                     << DIM << " - pool payment service offline" << RESET;
