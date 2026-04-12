@@ -189,137 +189,95 @@ void ConsoleDashboard::processInput() {
             case 'h':
             case 'H':
             case '?':
-                // Dump a plain-English explanation of every dashboard row and
-                // what the current numbers mean, so a first-time operator
-                // understands what their node is doing without needing the
-                // README or asking anywhere.
+                // Show a compact topic menu. User presses 1-6 for details.
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("--- Help: press a number for details ---");
+                    log->addMessage("[1] Block Sync   [2] Assets & Coverage   [3] Serving");
+                    log->addMessage("[4] Pool & Payment   [5] Services & Config   [6] Keys");
+                }
+                break;
+            case '1':
                 {
                     Log* log = Log::GetInstance();
                     AppMain* app = AppMain::GetInstance();
-
-                    log->addMessage("=== What this node is doing ===");
-                    log->addMessage("Version: " + getProductVersionString() + " (upstream " + getUpstreamVersionString() + ")");
-
-                    // --- Block sync ---
-                    log->addMessage("");
-                    log->addMessage("-- Block sync --");
+                    log->addMessage("--- Block Sync ---");
                     ChainAnalyzer* ha = app->getChainAnalyzerIfSet();
-                    if (ha) {
-                        log->addMessage("Block: " + formatNumber(ha->getSyncHeight()) + " (your local chain analyzer has processed");
-                        log->addMessage("  up to this DigiByte block). 'Fully Synced' means your local DigiByte Core");
-                        log->addMessage("  and our analyzer are both at the current chain tip.");
+                    if (ha) log->addMessage("Height: " + formatNumber(ha->getSyncHeight()));
+                    log->addMessage("Shows how far your chain analyzer has processed. 'Fully Synced'");
+                    log->addMessage("  means the analyzer and your DigiByte wallet agree on the tip.");
+                    log->addMessage("Speed shows ms per block during catch-up; ETA estimates remain.");
+                }
+                break;
+            case '2':
+                {
+                    Log* log = Log::GetInstance();
+                    Database* hdb = AppMain::GetInstance()->getDatabaseIfSet();
+                    uint64_t localCount = hdb ? hdb->getAssetCountOnChain() : 0;
+                    unsigned int tracked, have;
+                    { std::lock_guard<std::mutex> lk(_coverageMutex); tracked = _coverageTrackedCount; have = _coverageHaveCount; }
+                    log->addMessage("--- Assets & Coverage ---");
+                    log->addMessage("Local: " + formatNumber(localCount) + " unique DigiAsset IDs in your database.");
+                    log->addMessage("  Includes NFTs, tokens, domains (DName/DDesk), old pre-PSP assets.");
+                    log->addMessage("Tracked: " + std::to_string(tracked) + " = the subset enrolled in the pool's");
+                    log->addMessage("  permanent storage list. Always smaller than local (PSP is opt-in).");
+                    if (tracked > 0) {
+                        char buf[32]; snprintf(buf, sizeof(buf), "%.1f%%", 100.0 * have / (double)tracked);
+                        log->addMessage("Coverage: " + std::to_string(have) + "/" + std::to_string(tracked) +
+                                        " (" + buf + "). 100% = chain analyzer is healthy.");
                     }
-
-                    // --- Assets ---
-                    log->addMessage("");
-                    log->addMessage("-- Asset index --");
-                    Database* hdb = app->getDatabaseIfSet();
-                    uint64_t localCount = 0;
-                    if (hdb) localCount = hdb->getAssetCountOnChain();
-                    unsigned int tracked = 0;
-                    unsigned int have = 0;
-                    bool covChecked = false;
-                    {
-                        std::lock_guard<std::mutex> lk(_coverageMutex);
-                        tracked = _coverageTrackedCount;
-                        have = _coverageHaveCount;
-                        covChecked = _coverageChecked;
-                    }
-                    log->addMessage("Local count: " + formatNumber(localCount) +
-                                    " - every DigiAsset issuance your chain analyzer has");
-                    log->addMessage("  seen on-chain and stored in the local assets table. Includes NFTs, fungible");
-                    log->addMessage("  tokens, DigiByte Domain records (the DName/DDesk ones), and old pre-PSP assets.");
-                    if (covChecked) {
-                        log->addMessage("Tracked: " + std::to_string(tracked) +
-                                        " - the subset that enrolled in mctrivia's Permanent Storage");
-                        log->addMessage("  Pool at issuance time. This is what /permanent/<page>.json on the pool server");
-                        log->addMessage("  lists. It is ALWAYS smaller than local count because PSP enrollment is opt-in.");
-                        if (tracked > 0) {
-                            double pct = 100.0 * (double)have / (double)tracked;
-                            char pctBuf[32];
-                            snprintf(pctBuf, sizeof(pctBuf), "%.1f%%", pct);
-                            log->addMessage("Coverage: " + std::to_string(have) + "/" +
-                                            std::to_string(tracked) + " (" + pctBuf +
-                                            ") - of the tracked list, how many are");
-                            log->addMessage("  in your local db. 100% is strong evidence your chain analyzer is not");
-                            log->addMessage("  missing any issuances, because PSP and non-PSP assets go through the");
-                            log->addMessage("  same parse path. If this is below 100%, missing assetIds are logged");
-                            log->addMessage("  at WARNING level in the main log stream.");
-                        }
-                    }
-
-                    // --- Serving ---
-                    log->addMessage("");
-                    log->addMessage("-- Serving --");
-                    bool available;
-                    uint64_t blocksSent;
-                    uint64_t dataSent;
-                    double rate;
-                    {
-                        std::lock_guard<std::mutex> lk(_bitswapMutex);
-                        available = _bitswapAvailable;
-                        blocksSent = _bitswapBlocksSent;
-                        dataSent = _bitswapDataSent;
-                        rate = _bitswapBlocksPerMin;
-                    }
-                    if (available) {
-                        log->addMessage("Blocks sent: " + formatNumber(blocksSent) +
-                                        " - number of IPFS blocks (small chunks of file data)");
-                        log->addMessage("  your node has served out to other IPFS peers since startup. This is measured");
-                        log->addMessage("  directly from Kubo's bitswap stats and proves your node is actively supplying");
-                        log->addMessage("  content to the network, not just storing it.");
-                        char rateBuf[64];
-                        snprintf(rateBuf, sizeof(rateBuf), "%.1f", rate);
-                        log->addMessage(std::string("Rate: ") + rateBuf + " blocks/min over the last 30-second poll window.");
-                        log->addMessage("  0.0 is normal if nobody is currently requesting content from you.");
+                }
+                break;
+            case '3':
+                {
+                    Log* log = Log::GetInstance();
+                    uint64_t bs, ds; double r; bool av;
+                    { std::lock_guard<std::mutex> lk(_bitswapMutex); av=_bitswapAvailable; bs=_bitswapBlocksSent; ds=_bitswapDataSent; r=_bitswapBlocksPerMin; }
+                    log->addMessage("--- Serving ---");
+                    if (av) {
+                        log->addMessage("Blocks sent: " + formatNumber(bs) + " chunks served to IPFS peers.");
+                        char buf[64]; snprintf(buf, sizeof(buf), "%.1f", r);
+                        log->addMessage("Rate: " + std::string(buf) + " blocks/min. 0.0 is normal when idle.");
                     } else {
-                        log->addMessage("IPFS API was unreachable on the last poll - make sure IPFS Desktop is");
-                        log->addMessage("  running and accepting HTTP API calls on localhost:5001.");
+                        log->addMessage("IPFS API unreachable. Is IPFS Desktop running?");
                     }
-
-                    // --- Pool ---
-                    log->addMessage("");
-                    log->addMessage("-- PSP Pool / Payment --");
-                    log->addMessage("Hosting pool files: your node is pinning (storing) the canonical list of");
-                    log->addMessage("  DigiAsset metadata files the pool server tracks. Other DigiAsset clients can");
-                    log->addMessage("  fetch them from you via IPFS. You are contributing storage to the network.");
-                    log->addMessage("Payment row can show four things:");
-                    log->addMessage("  * 'active' (green) - the pool server said payoutsEnabled=true and DGB is");
-                    log->addMessage("    flowing to your payout address.");
-                    log->addMessage("  * 'registered (no payouts yet)' (yellow) - the pool server accepted your");
-                    log->addMessage("    registration but has NOT enabled payouts yet. This is the expected state");
-                    log->addMessage("    when running against a Phase 1 DigiAssetPoolServer or against a pool whose");
-                    log->addMessage("    operator has not funded / enabled payouts. You are contributing storage but");
-                    log->addMessage("    no DGB is being sent to you.");
-                    log->addMessage("  * 'unavailable' (red) - the pool server's /list endpoint is unreachable or");
-                    log->addMessage("    returning errors. This is what you saw against mctrivia's server, which");
-                    log->addMessage("    has been returning HTTP 500 since ~July 2024.");
-                    log->addMessage("  * 'checking...' (dim) - the first /list probe hasn't completed yet.");
-                    log->addMessage("To use a pool server other than mctrivia's default, set psp1server=<url> in");
-                    log->addMessage("  config.cfg. E.g. psp1server=http://127.0.0.1:14028 to point at a local");
-                    log->addMessage("  DigiAssetPoolServer.exe running on this same machine.");
-
-                    // --- Web UI / RPC / Ports ---
-                    log->addMessage("");
-                    log->addMessage("-- Services --");
-                    WebServer* hw = app->getWebServerIfSet();
+                    log->addMessage("This proves your node supplies content, not just stores it.");
+                }
+                break;
+            case '4':
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("--- Pool & Payment ---");
+                    log->addMessage("Your node pins files the pool server tracks. Others fetch via IPFS.");
+                    log->addMessage("Payment shows:  active (green) = DGB is flowing to you");
+                    log->addMessage("  registered (yellow) = pool accepted you but payouts not enabled");
+                    log->addMessage("  unavailable (red) = pool /list endpoint is broken or unreachable");
+                    log->addMessage("  checking (dim) = first probe hasn't finished yet");
+                    log->addMessage("Set psp1server=http://... in config.cfg to use a different pool.");
+                }
+                break;
+            case '5':
+                {
+                    Log* log = Log::GetInstance();
+                    WebServer* hw = AppMain::GetInstance()->getWebServerIfSet();
+                    log->addMessage("--- Services & Config ---");
                     if (hw) {
-                        log->addMessage("Web UI: http://localhost:" + std::to_string(hw->getPort()) +
-                                        "/ - browse local node in a browser");
+                        log->addMessage("Web UI: http://localhost:" + std::to_string(hw->getPort()) + "/");
                         std::string ip = hw->getExternalIP();
-                        if (!ip.empty() && ip != "unknown") {
-                            log->addMessage("External IP: " + ip + " - what the internet sees you as");
-                        }
+                        if (!ip.empty() && ip != "unknown") log->addMessage("External IP: " + ip);
                     }
-                    log->addMessage("RPC Server: JSON-RPC endpoint on port 14024 for DigiAssetCore-cli.exe commands.");
-                    log->addMessage("  Try: DigiAssetCore-cli.exe getnodestats");
-
-                    // --- Keys ---
-                    log->addMessage("");
-                    log->addMessage("-- Keys --");
-                    log->addMessage("Q=Quit  A=Assets  P=Port check  L=Log level  F=Fix IPFS announce");
-                    log->addMessage("V=Verify multiaddrs  H=This info");
-                    log->addMessage("=== end info ===");
+                    log->addMessage("RPC: port 14024 (DigiAssetCore-cli.exe getnodestats)");
+                    log->addMessage("Config: config.cfg in the exe's working directory.");
+                    log->addMessage("  Key settings: rpcuser, rpcpassword, rpcport, psp1server, psp1payout");
+                }
+                break;
+            case '6':
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("--- Keyboard Shortcuts ---");
+                    log->addMessage("Q = Quit       A = Asset count    P = Port check");
+                    log->addMessage("L = Log level  V = Verify IPFS    F = Fix IPFS announce");
+                    log->addMessage("H = Help menu  1-6 = Help sections");
                 }
                 break;
             default:

@@ -26,6 +26,7 @@
 #include "PoolDashboard.h"
 #include "PoolDatabase.h"
 #include "PoolServer.h"
+#include "PoolVerifier.h"
 #include "CurlHandler.h"
 #include <atomic>
 #include <chrono>
@@ -248,10 +249,15 @@ int main(int /*argc*/, char** /*argv*/) {
     // "registered (no payouts yet)" instead of "active", so nobody thinks
     // they're earning DGB when they aren't.
     bool payoutsEnabled = readConfigInt(cfg, "poolpayouts", 0) != 0;
+    // IPFS HTTP API base the verifier uses for swarm-connect dial-back.
+    // Defaults to the same localhost Kubo that DigiAssetCore itself talks to.
+    std::string ipfsApi = cfg.count("ipfspath") ? cfg["ipfspath"]
+                                                : "http://localhost:5001/api/v0/";
 
     std::cout << "DigiAsset Pool Server starting...\n";
     std::cout << "  db: " << dbPath << "\n";
     std::cout << "  port: " << port << "\n";
+    std::cout << "  ipfsApi: " << ipfsApi << "\n";
     std::cout << "  poolpayouts: " << (payoutsEnabled ? "ENABLED" : "disabled (Phase 1 default)") << "\n";
     if (payoutsEnabled) {
         std::cout << "\n  !!! WARNING: poolpayouts=1 is set but Phase 3 automated payout\n"
@@ -282,8 +288,16 @@ int main(int /*argc*/, char** /*argv*/) {
         return 1;
     }
 
-    // Dashboard takes over the console.
-    PoolDashboard dashboard(*db, *server);
+    // PoolVerifier runs a background dial-back loop against registered
+    // nodes using the local IPFS HTTP API. Phase 2 scope: verifies peers
+    // are reachable via swarm-connect; doesn't yet verify they're serving
+    // specific CIDs. See pool/PoolVerifier.h for why.
+    PoolVerifier verifier(*db, ipfsApi);
+
+    // Dashboard takes over the console. Passes the config path so [P] and
+    // [E] key handlers can re-read pool.cfg on demand (allows adjusting
+    // poolspendperperiod between payouts without a restart).
+    PoolDashboard dashboard(*db, *server, verifier, "pool.cfg");
     if (!PoolDashboard::enableVT100()) {
         std::cerr << "Warning: could not enable VT100 on this console, dashboard may look garbled\n";
     }
@@ -291,6 +305,7 @@ int main(int /*argc*/, char** /*argv*/) {
     dashboard.start();
     dashboard.addLog("Pool database ready: " + dbPath);
     dashboard.addLog("HTTP server listening on port " + std::to_string(port));
+    dashboard.addLog("Verifier using IPFS API: " + ipfsApi);
 
     // First-run snapshot runs after dashboard is up so the progress lines
     // show in the log area. Blocks the main thread for ~5-10 seconds.
@@ -301,7 +316,9 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
     server->start();
+    verifier.start();
     dashboard.addLog("Accepting connections");
+    dashboard.addLog("Verifier running (swarm-connect dial-back every 60s)");
     dashboard.addLog("Ready. Press [H] for keys, [Q] to quit.");
 
     // Main shutdown wait loop.
@@ -310,6 +327,7 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
     dashboard.addLog("Shutting down...");
+    verifier.stop();
     server->stop();
     dashboard.stop();
     delete server;

@@ -29,6 +29,7 @@ set(HEADER_FILES
         PoolDatabase.h
         PoolServer.h
         PoolDashboard.h
+        PoolVerifier.h
         )
 
 set(SOURCE_FILES
@@ -36,6 +37,7 @@ set(SOURCE_FILES
         PoolDatabase.cpp
         PoolServer.cpp
         PoolDashboard.cpp
+        PoolVerifier.cpp
         # Borrow sqlite3.c and curl_stubs.cpp from the main src/ tree so the
         # pool server doesn't need its own copies. sqlite for the pool db,
         # curl_stubs for the first-run HTTP snapshot of mctrivia's /permanent.

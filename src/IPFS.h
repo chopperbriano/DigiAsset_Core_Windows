@@ -39,6 +39,10 @@ private:
     static std::string getIP();
     static std::string findPublicAddress(const std::vector<std::string>& addresses, const std::string& ip);
     static std::vector<std::string> extractAddresses(const std::string& idString);
+    // Pull the bare "ID" field from the /id JSON response (the local
+    // node's own peerId, e.g. "12D3KooW..." or "Qm..."). Returns empty
+    // string if the field is missing or the JSON is malformed.
+    static std::string extractIdField(const std::string& idString);
 
     //TestHelpers
     std::string

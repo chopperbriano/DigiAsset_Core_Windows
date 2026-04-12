@@ -88,6 +88,21 @@ void PoolDatabase::buildSchema() {
         ");"
     );
 
+    // Schema migration: win.33 adds dial-back verification columns. These
+    // ALTER TABLEs fail silently if the columns already exist (sqlite's
+    // ALTER doesn't have IF NOT EXISTS; we catch the error and move on).
+    auto tryAddColumn = [this](const char* sql) {
+        char* errMsg = nullptr;
+        int rc = sqlite3_exec(_db, sql, nullptr, nullptr, &errMsg);
+        if (rc != SQLITE_OK && errMsg) {
+            // Ignore "duplicate column name" - that just means the migration
+            // already ran on a previous launch against this pool.db.
+            sqlite3_free(errMsg);
+        }
+    };
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN lastVerifyOk INTEGER NOT NULL DEFAULT 0;");
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN verifyFails  INTEGER NOT NULL DEFAULT 0;");
+
     // permanent_assets rows are imported from the first-run snapshot of
     // mctrivia's /permanent/<page>.json or added later by the operator.
     // Primary key includes cid because a single assetId can reference
@@ -167,6 +182,150 @@ void PoolDatabase::upsertNode(const std::string& peerId,
         throw std::runtime_error(std::string("upsertNode step failed: ") +
                                  sqlite3_errmsg(_db));
     }
+}
+
+void PoolDatabase::recordVerifySuccess(const std::string& peerId) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    const char* sql =
+        "UPDATE nodes SET lastVerifyOk = ?, verifyFails = 0 WHERE peerId = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_int64(stmt, 1, now);
+    sqlite3_bind_text(stmt, 2, peerId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void PoolDatabase::recordVerifyFailure(const std::string& peerId) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql =
+        "UPDATE nodes SET verifyFails = verifyFails + 1 WHERE peerId = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_text(stmt, 1, peerId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+std::vector<std::string> PoolDatabase::getPeerIdsForVerification(unsigned int limit) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    // Least-recently-verified first. Also favors nodes we've never verified
+    // (lastVerifyOk = 0 puts them at the top of the order). Still seen in
+    // the last week, so we don't waste time probing ghosts.
+    int64_t cutoff = nowUnix() - 7 * 24 * 60 * 60;
+    std::vector<std::string> out;
+    const char* sql =
+        "SELECT peerId FROM nodes WHERE lastSeen >= ? "
+        "ORDER BY lastVerifyOk ASC LIMIT ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, cutoff);
+        sqlite3_bind_int(stmt, 2, (int) limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* p = sqlite3_column_text(stmt, 0);
+            if (p) out.emplace_back(reinterpret_cast<const char*>(p));
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
+unsigned int PoolDatabase::countVerifiedSince(int64_t unixSeconds) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql = "SELECT COUNT(*) FROM nodes WHERE lastVerifyOk >= ?;";
+    sqlite3_stmt* stmt = nullptr;
+    unsigned int count = 0;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, unixSeconds);
+        if (sqlite3_step(stmt) == SQLITE_ROW) count = (unsigned int) sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
+unsigned int PoolDatabase::countFailedOut() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql = "SELECT COUNT(*) FROM nodes WHERE verifyFails >= 3;";
+    sqlite3_stmt* stmt = nullptr;
+    unsigned int count = 0;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) count = (unsigned int) sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
+std::vector<PoolDatabase::PayoutTarget> PoolDatabase::getVerifiedPayoutTargets() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    int64_t seenCutoff = now - 7 * 24 * 60 * 60;   // seen in last 7 days
+    int64_t verifyCutoff = now - 24 * 60 * 60;       // verified in last 24h
+
+    std::vector<PayoutTarget> out;
+    const char* sql =
+        "SELECT peerId, payoutAddress FROM nodes "
+        "WHERE lastSeen >= ? AND lastVerifyOk >= ? AND verifyFails < 3 "
+        "ORDER BY peerId;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, seenCutoff);
+        sqlite3_bind_int64(stmt, 2, verifyCutoff);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            PayoutTarget t;
+            const unsigned char* p = sqlite3_column_text(stmt, 0);
+            const unsigned char* a = sqlite3_column_text(stmt, 1);
+            if (p) t.peerId = (const char*) p;
+            if (a) t.payoutAddress = (const char*) a;
+            if (!t.payoutAddress.empty()) out.push_back(t);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
+void PoolDatabase::recordPayout(const std::string& payoutAddress, int64_t amountDgbSat,
+                                const std::string& txid) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    const char* sql =
+        "INSERT INTO payouts_ledger (payoutAddress, amountDgbSat, owedAt, paidTxid, paidAt) "
+        "VALUES (?, ?, ?, ?, ?);";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_text(stmt, 1, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, amountDgbSat);
+    sqlite3_bind_int64(stmt, 3, now);
+    sqlite3_bind_text(stmt, 4, txid.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 5, now);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+double PoolDatabase::getPaidTotalDgb() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql = "SELECT COALESCE(SUM(amountDgbSat), 0) FROM payouts_ledger WHERE paidTxid IS NOT NULL;";
+    sqlite3_stmt* stmt = nullptr;
+    double total = 0.0;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            total = sqlite3_column_int64(stmt, 0) / 100000000.0;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return total;
+}
+
+unsigned int PoolDatabase::getPaidCount() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql = "SELECT COUNT(*) FROM payouts_ledger WHERE paidTxid IS NOT NULL;";
+    sqlite3_stmt* stmt = nullptr;
+    unsigned int count = 0;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) count = (unsigned int) sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    return count;
 }
 
 void PoolDatabase::insertPermanentAsset(const std::string& assetId,
@@ -301,11 +460,16 @@ std::string PoolDatabase::buildPermanentPageJson(unsigned int page) {
 
 std::string PoolDatabase::buildNodesJson() {
     std::lock_guard<std::mutex> lk(_mutex);
-    // 7-day window: any node we've seen in the last week is "online enough"
-    // to list on /nodes.json.
+    // 7-day window, AND exclude nodes that have failed dial-back
+    // verification 3+ times in a row. Failed-out nodes are ghosts — they
+    // keep sending keepalive pings but the pool operator can't actually
+    // reach them via IPFS, so other clients shouldn't see them either.
     int64_t cutoff = nowUnix() - 7 * 24 * 60 * 60;
 
-    const char* sql = "SELECT peerId FROM nodes WHERE lastSeen >= ? ORDER BY lastSeen DESC;";
+    const char* sql =
+        "SELECT peerId FROM nodes "
+        "WHERE lastSeen >= ? AND verifyFails < 3 "
+        "ORDER BY lastSeen DESC;";
     sqlite3_stmt* stmt = nullptr;
     std::ostringstream json;
     json << "[";

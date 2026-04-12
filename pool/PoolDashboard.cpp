@@ -1,7 +1,12 @@
 #include "PoolDashboard.h"
+#include "CurlHandler.h"
 #include "PoolDatabase.h"
 #include "PoolServer.h"
+#include "PoolVerifier.h"
+#include "Version.h"
+#include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <iomanip>
 
@@ -27,23 +32,19 @@
 #define FG_BRIGHT_WHITE ESC "97m"
 
 namespace {
+    // Same format as ConsoleDashboard::formatDuration in the main exe.
     std::string formatDuration(int64_t seconds) {
-        int d = (int) (seconds / 86400);
-        seconds %= 86400;
-        int h = (int) (seconds / 3600);
-        seconds %= 3600;
-        int m = (int) (seconds / 60);
-        int s = (int) (seconds % 60);
-        std::ostringstream out;
-        if (d > 0) out << d << "d ";
-        if (d > 0 || h > 0) {
-            out << std::setfill('0') << std::setw(2) << h << ":"
-                << std::setfill('0') << std::setw(2) << m << ":"
-                << std::setfill('0') << std::setw(2) << s;
-        } else {
-            out << m << " min " << s << " sec";
+        if (seconds < 0) return "--";
+        if (seconds < 60) return std::to_string((int) seconds) + " sec";
+        if (seconds < 3600) return std::to_string((int) (seconds / 60)) + " min";
+        if (seconds < 86400) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(1) << seconds / 3600.0 << " hours";
+            return oss.str();
         }
-        return out.str();
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(1) << seconds / 86400.0 << " days";
+        return oss.str();
     }
 
     std::string formatNumber(uint64_t n) {
@@ -60,8 +61,63 @@ namespace {
     }
 }
 
-PoolDashboard::PoolDashboard(PoolDatabase& db, PoolServer& server)
-    : _db(db), _server(server), _startTime(std::chrono::system_clock::now()) {
+PoolDashboard::PoolDashboard(PoolDatabase& db, PoolServer& server, PoolVerifier& verifier,
+                             const std::string& configPath)
+    : _db(db), _server(server), _verifier(verifier), _configPath(configPath),
+      _startTime(std::chrono::system_clock::now()) {
+}
+
+namespace {
+    // Re-read pool.cfg on demand (same tiny parser as main.cpp).
+    std::map<std::string, std::string> readPoolConfig(const std::string& path) {
+        std::map<std::string, std::string> out;
+        std::ifstream in(path);
+        if (!in) return out;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty() || line[0] == '#') continue;
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            out[line.substr(0, eq)] = line.substr(eq + 1);
+        }
+        return out;
+    }
+
+    std::string sendToAddress(const std::string& rpcUser, const std::string& rpcPass,
+                              int rpcPort, const std::string& address, double amountDgb) {
+        // Build the JSON-RPC request for sendtoaddress.
+        char amountBuf[64];
+        snprintf(amountBuf, sizeof(amountBuf), "%.8f", amountDgb);
+
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"sendtoaddress\","
+                           "\"params\":[\"" + address + "\"," + amountBuf + "]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" +
+                          std::to_string(rpcPort);
+
+        std::string respBody;
+        long status = 0;
+        try {
+            status = CurlHandler::postJson(url, body, respBody, 30000);
+        } catch (const std::exception& e) {
+            return std::string("ERROR: ") + e.what();
+        }
+
+        if (status < 200 || status >= 300) {
+            return "ERROR: HTTP " + std::to_string(status) + " " + respBody;
+        }
+
+        // Parse txid from {"result":"<txid>","error":null,...}
+        size_t rpos = respBody.find("\"result\"");
+        if (rpos == std::string::npos) return "ERROR: no result field in response";
+        size_t q1 = respBody.find('"', respBody.find(':', rpos) + 1);
+        size_t q2 = (q1 != std::string::npos) ? respBody.find('"', q1 + 1) : std::string::npos;
+        if (q1 == std::string::npos || q2 == std::string::npos) {
+            // result might be null (error case)
+            return "ERROR: " + respBody;
+        }
+        return respBody.substr(q1 + 1, q2 - q1 - 1); // the txid
+    }
 }
 
 PoolDashboard::~PoolDashboard() {
@@ -114,31 +170,146 @@ void PoolDashboard::processInput() {
         int ch = _getch();
         if (ch == 'q' || ch == 'Q' || ch == 3 /* Ctrl+C */) {
             _quit.store(true);
+        } else if (_awaitingPayoutConfirm.load()) {
+            // We're waiting for Y/N after an [E] press.
+            _awaitingPayoutConfirm.store(false);
+            if (ch == 'y' || ch == 'Y') {
+                addLog("Executing payout...");
+                auto cfg = readPoolConfig(_configPath);
+                std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+                std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
+                int rpcPort = 14022;
+                try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
+
+                auto targets = _db.getVerifiedPayoutTargets();
+                double spend = 0.0;
+                try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
+                double perNode = (targets.empty() || spend <= 0) ? 0.0 : spend / (double) targets.size();
+                int64_t perNodeSat = (int64_t)(perNode * 100000000.0);
+
+                int success = 0;
+                int failed = 0;
+                for (const auto& t: targets) {
+                    std::string result = sendToAddress(rpcUser, rpcPass, rpcPort,
+                                                       t.payoutAddress, perNode);
+                    if (result.substr(0, 5) == "ERROR") {
+                        addLog("  FAIL " + t.payoutAddress + ": " + result);
+                        failed++;
+                    } else {
+                        addLog("  SENT " + t.payoutAddress + " " +
+                               std::to_string(perNode) + " DGB txid=" + result.substr(0, 16) + "...");
+                        _db.recordPayout(t.payoutAddress, perNodeSat, result);
+                        success++;
+                    }
+                }
+                addLog("Payout complete: " + std::to_string(success) + " sent, " +
+                        std::to_string(failed) + " failed");
+            } else {
+                addLog("Payout cancelled.");
+            }
         } else if (ch == 'p' || ch == 'P') {
-            addLog("Pending payouts: 0.0000 DGB (Phase 3 not yet implemented)");
+            // Payout preview (read-only).
+            auto cfg = readPoolConfig(_configPath);
+            auto targets = _db.getVerifiedPayoutTargets();
+            double spend = 0.0;
+            try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
+            bool enabled = false;
+            try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
+
+            addLog("--- Payout Preview ---");
+            addLog("Verified nodes: " + std::to_string(targets.size()));
+            char buf[64]; snprintf(buf, sizeof(buf), "%.4f", spend);
+            addLog("Budget: " + std::string(buf) + " DGB (poolspendperperiod)");
+            if (!enabled) addLog("WARNING: poolpayouts=0 (payouts disabled). Set to 1 to enable.");
+            if (targets.empty()) addLog("No eligible nodes. Nodes must be verified within 24h.");
+            else if (spend <= 0) addLog("No budget set. Add poolspendperperiod=<DGB> to pool.cfg.");
+            else {
+                double perNode = spend / (double) targets.size();
+                char perBuf[64]; snprintf(perBuf, sizeof(perBuf), "%.8f", perNode);
+                addLog("Each node receives: " + std::string(perBuf) + " DGB");
+                for (const auto& t: targets) {
+                    addLog("  -> " + t.payoutAddress);
+                }
+            }
+            double paid = _db.getPaidTotalDgb();
+            char paidBuf[64]; snprintf(paidBuf, sizeof(paidBuf), "%.4f", paid);
+            addLog("Total paid to date: " + std::string(paidBuf) + " DGB (" +
+                    std::to_string(_db.getPaidCount()) + " transactions)");
         } else if (ch == 'e' || ch == 'E') {
-            addLog("Execute payout: Phase 3 not yet implemented");
+            // Execute payout — with confirmation gate.
+            auto cfg = readPoolConfig(_configPath);
+            bool enabled = false;
+            try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
+            double spend = 0.0;
+            try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
+            std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+
+            auto targets = _db.getVerifiedPayoutTargets();
+
+            if (!enabled) {
+                addLog("Cannot execute: poolpayouts=0 in pool.cfg. Set to 1 first.");
+            } else if (spend <= 0) {
+                addLog("Cannot execute: poolspendperperiod not set or zero in pool.cfg.");
+            } else if (targets.empty()) {
+                addLog("Cannot execute: no verified nodes eligible for payout.");
+            } else if (rpcUser.empty()) {
+                addLog("Cannot execute: rpcuser not set in pool.cfg (needed for wallet RPC).");
+            } else {
+                double perNode = spend / (double) targets.size();
+                char buf[64]; snprintf(buf, sizeof(buf), "%.8f", perNode);
+                addLog("--- CONFIRM PAYOUT ---");
+                addLog("Sending " + std::string(buf) + " DGB to each of " +
+                        std::to_string(targets.size()) + " verified node(s)");
+                char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.8f", spend);
+                addLog("Total: " + std::string(totalBuf) + " DGB from your wallet");
+                addLog("Press Y to confirm, any other key to cancel");
+                _awaitingPayoutConfirm.store(true);
+            }
         } else if (ch == 'n' || ch == 'N') {
             addLog("Registered nodes: " + std::to_string(_db.countTotalNodes()));
         } else if (ch == 'a' || ch == 'A') {
             addLog("Permanent assets: " + std::to_string(_db.countPermanentAssets()) +
                    " across " + std::to_string(_db.countPermanentPages()) + " pages");
         } else if (ch == 'h' || ch == 'H' || ch == '?') {
-            addLog("Pool Server - keys: Q=Quit  N=Node count  A=Asset count  P=Pending payouts  E=Execute payout");
+            addLog("--- Help ---");
+            addLog("Q = Quit   N = Node count   A = Asset count   H = This help");
+            addLog("P = Pending payouts (Phase 3 TBD)   E = Execute payout (Phase 3 TBD)");
+            addLog("Verified row: nodes that passed the dial-back swarm/connect probe.");
+            addLog("Failed out: nodes with 3+ consecutive probe failures (excluded from /nodes.json).");
+            addLog("Payouts: 'disabled' until poolpayouts=1 is set in pool.cfg + Phase 3 ships.");
         }
     }
 #endif
 }
 
+void PoolDashboard::updateConsoleSize() {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        _width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        _height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    }
+#else
+    _width = 120;
+    _height = 40;
+#endif
+    if (_width < 40) _width = 40;
+    if (_height < 15) _height = 15;
+}
+
 void PoolDashboard::render() {
+    updateConsoleSize();
+
     std::ostringstream out;
     out << HIDE_CURSOR << CURSOR_HOME;
 
-    const int w = 90;
+    const int w = _width;
     auto separator = [&]() { out << ERASE_LINE << std::string(w, '-') << "\n"; };
 
-    // Header
-    std::string title = "DigiAsset Pool Server (experimental) - Phase 1";
+    // Centered title — same style as DigiAsset Core for Windows header.
+    std::string title = "DigiAsset Pool Server for Windows " + std::string(VERSION_STRING) +
+                        "  (Phase 1 - experimental)";
     int pad = (w - (int) title.size()) / 2;
     out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE
         << std::string(pad > 0 ? pad : 0, ' ') << title << RESET << "\n";
@@ -156,33 +327,78 @@ void PoolDashboard::render() {
     unsigned int permPages = _db.countPermanentPages();
     uint64_t requests = _server.getRequestCount();
 
-    out << ERASE_LINE << "  " << "Listening:     " << FG_GREEN << "Port " << _server.getPort() << RESET
-        << "            " << "Requests:      " << FG_BRIGHT_WHITE << formatNumber(requests) << RESET << "\n";
+    // ---- Aligned two-column header (same cell() pattern as DigiAssetCore) ----
+    const int COL1_LABEL_W = 16;
+    const int COL1_VALUE_W = 14;
+    const int COL2_LABEL_W = 14;
 
-    out << ERASE_LINE << "  " << "Registered:    " << FG_BRIGHT_WHITE << totalNodes << " nodes" << RESET
-        << "           " << "Active (1h):   " << FG_BRIGHT_WHITE << activeNodes << " nodes" << RESET << "\n";
+    auto cell = [&](const std::string& label, const std::string& value,
+                    const char* color, int labelWidth, int valueWidth) -> std::string {
+        std::string result;
+        std::string lp = label + ":" + std::string(std::max(0, labelWidth - (int) label.size() - 1), ' ');
+        result += lp;
+        result += color;
+        result += value;
+        result += RESET;
+        if (valueWidth > 0) {
+            int vpad = valueWidth - (int) value.size();
+            if (vpad > 0) result += std::string(vpad, ' ');
+        }
+        return result;
+    };
 
-    out << ERASE_LINE << "  " << "Permanent:     " << FG_BRIGHT_WHITE << formatNumber(permAssets)
-        << " assets" << RESET << " / " << FG_BRIGHT_WHITE << permPages << " pages" << RESET << "\n";
+    // Dial-back verification counters.
+    int64_t verifyCutoff = std::chrono::duration_cast<std::chrono::seconds>(
+                                   now.time_since_epoch()).count() - 3600;
+    unsigned int verifiedRecent = _db.countVerifiedSince(verifyCutoff);
+    unsigned int failedOut = _db.countFailedOut();
+    uint64_t probesAttempted = _verifier.getProbesAttempted();
+    uint64_t probesSucceeded = _verifier.getProbesSucceeded();
 
-    // Payout row. Shows the poolpayouts config state prominently so the
-    // operator always knows what clients are seeing. If poolpayouts is
-    // still disabled (Phase 1 default), say so in yellow. When Phase 3
-    // flips to enabled, switch to green.
+    // Row: Listening | Requests
+    out << ERASE_LINE << "  "
+        << cell("Listening", "Port " + std::to_string(_server.getPort()), FG_GREEN, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Requests", formatNumber(requests), FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+        << "\n";
+
+    // Row: Registered | Active (1h)
+    out << ERASE_LINE << "  "
+        << cell("Registered", std::to_string(totalNodes) + " nodes", FG_BRIGHT_WHITE, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Active (1h)", std::to_string(activeNodes) + " nodes", FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+        << "\n";
+
+    // Row: Verified (1h) | Failed out
+    out << ERASE_LINE << "  "
+        << cell("Verified (1h)", std::to_string(verifiedRecent) + " nodes",
+                verifiedRecent > 0 ? FG_GREEN : FG_YELLOW, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Failed out", std::to_string(failedOut) + " nodes",
+                failedOut > 0 ? FG_YELLOW : FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+        << "\n";
+
+    // Row: Probes | Permanent
+    out << ERASE_LINE << "  "
+        << cell("Probes", formatNumber(probesSucceeded) + " ok / " + formatNumber(probesAttempted),
+                FG_BRIGHT_WHITE, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Permanent", formatNumber(permAssets) + " / " + std::to_string(permPages) + " pages",
+                FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+        << "\n";
+
+    // Row: Payout status + real ledger totals.
     {
         bool payoutsEnabled = _server.getPayoutsEnabled();
-        out << ERASE_LINE << "  " << "Payouts:       ";
-        if (payoutsEnabled) {
-            out << FG_GREEN << "ENABLED" << RESET << DIM
-                << "  (Pending: 0.0000 DGB / Paid: 0.0000 DGB)" << RESET;
-        } else {
-            out << FG_YELLOW << "disabled" << RESET << DIM
-                << "  (clients see 'registered (no payouts yet)')" << RESET;
-        }
-        out << "\n";
+        double paidTotal = _db.getPaidTotalDgb();
+        unsigned int paidCount = _db.getPaidCount();
+
+        std::string payVal = payoutsEnabled ? "ENABLED" : "disabled";
+        char paidBuf[64];
+        snprintf(paidBuf, sizeof(paidBuf), "%.4f DGB (%u tx)", paidTotal, paidCount);
+        out << ERASE_LINE << "  "
+            << cell("Payouts", payVal, payoutsEnabled ? FG_GREEN : FG_YELLOW, COL1_LABEL_W, COL1_VALUE_W)
+            << cell("Paid total", paidBuf, FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+            << "\n";
     }
 
-    // Time row
+    // Row: Time | Uptime
     auto t = std::chrono::system_clock::to_time_t(now);
     std::tm tmBuf{};
 #ifdef _WIN32
@@ -193,30 +409,42 @@ void PoolDashboard::render() {
     char timeStr[16];
     std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &tmBuf);
 
-    out << ERASE_LINE << "  " << "Time:          " << FG_BRIGHT_WHITE << timeStr << RESET
-        << "            " << "Uptime:        " << FG_BRIGHT_WHITE << formatDuration(uptime) << RESET << "\n";
+    out << ERASE_LINE << "  "
+        << cell("Time", timeStr, FG_BRIGHT_WHITE, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Uptime", formatDuration(uptime), FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+        << "\n";
 
     separator();
 
-    // Log area
+    // Log area — show as many recent messages as fit in the terminal, then
+    // key hints immediately after (no blank gap). Clear-to-end-of-screen
+    // wipes any stale content below from prior longer renders or window
+    // resizes.
     out << BOLD << ERASE_LINE << " Log:" << RESET << "\n";
     {
+        // Available = terminal height - fixed header rows(10) - "Log:" row(1) - key hint row(1)
+        int availableLogLines = _height - 12;
+        if (availableLogLines < 5) availableLogLines = 5;
+
         std::lock_guard<std::mutex> lk(_logMutex);
-        for (const auto& line: _logLines) {
-            out << ERASE_LINE << "  " << line << "\n";
+        // Show the most recent N lines that fit.
+        int startIdx = 0;
+        if ((int) _logLines.size() > availableLogLines) {
+            startIdx = (int) _logLines.size() - availableLogLines;
         }
-        // Pad to MAX_LOG_LINES so the key-hint row sits in a stable position.
-        for (size_t i = _logLines.size(); i < MAX_LOG_LINES; i++) {
-            out << ERASE_LINE << "\n";
+        for (int i = startIdx; i < (int) _logLines.size(); i++) {
+            out << ERASE_LINE << "  " << _logLines[i] << "\n";
         }
     }
 
-    // Key hints row
-    out << ERASE_LINE << DIM
-        << " [Q] Quit  [N] Nodes  [A] Assets  [P] Pending Payouts  [E] Execute Payout  [H] Help"
-        << RESET;
+    // Key hints row — sits right after the last log line.
+    // Phase 3 keys dimmed since they're placeholders.
+    out << ERASE_LINE
+        << " [Q] Quit  [N] Nodes  [A] Assets  [H] Help"
+        << DIM << "  [P] Payouts  [E] Execute (Phase 3)" << RESET;
 
-    // Clear to end of screen to scrub any stale output from longer renders.
+    // Clear everything below: wipe stale lines from prior renders or
+    // window resize, so the screen is clean below the key hints.
     out << ESC "J";
 
     std::cout << out.str() << std::flush;

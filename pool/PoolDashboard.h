@@ -20,10 +20,14 @@
 
 class PoolDatabase;
 class PoolServer;
+class PoolVerifier;
 
 class PoolDashboard {
 public:
-    PoolDashboard(PoolDatabase& db, PoolServer& server);
+    // configPath = path to pool.cfg, re-read on each [E] press so
+    // the operator can adjust poolspendperperiod without restarting.
+    PoolDashboard(PoolDatabase& db, PoolServer& server, PoolVerifier& verifier,
+                  const std::string& configPath = "pool.cfg");
     ~PoolDashboard();
 
     // Enable VT100 escape sequences on the Windows console. Returns true if
@@ -41,14 +45,21 @@ public:
 private:
     PoolDatabase& _db;
     PoolServer& _server;
+    PoolVerifier& _verifier;
+    std::string _configPath;
     std::atomic<bool> _running{false};
+    std::atomic<bool> _awaitingPayoutConfirm{false};
     std::atomic<bool> _quit{false};
     std::thread _thread;
     std::chrono::system_clock::time_point _startTime;
 
     std::mutex _logMutex;
     std::deque<std::string> _logLines;
-    static constexpr size_t MAX_LOG_LINES = 20;
+    static constexpr size_t MAX_LOG_LINES = 200;
+
+    int _width = 120;
+    int _height = 40;
+    void updateConsoleSize();
 
     void refreshLoop();
     void render();

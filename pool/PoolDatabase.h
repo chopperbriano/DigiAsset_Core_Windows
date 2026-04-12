@@ -29,6 +29,22 @@ public:
     void upsertNode(const std::string& peerId,
                     const std::string& payoutAddress);
 
+    // Dial-back verification state. The PoolVerifier thread calls these
+    // after each probe attempt.
+    //   recordVerifySuccess: bumps lastVerifyOk, resets verifyFails to 0
+    //   recordVerifyFailure: increments verifyFails (lastVerifyOk unchanged)
+    void recordVerifySuccess(const std::string& peerId);
+    void recordVerifyFailure(const std::string& peerId);
+
+    // Returns up to `limit` peerIds the verifier should probe next,
+    // ordered by lastVerifyOk ascending (least-recently-verified first).
+    // Used by PoolVerifier to pick work each iteration.
+    std::vector<std::string> getPeerIdsForVerification(unsigned int limit);
+
+    // Counts for the dashboard Verified: row.
+    unsigned int countVerifiedSince(int64_t unixSeconds);
+    unsigned int countFailedOut(); // nodes with verifyFails >= 3
+
     // Permanent assets (one row per (assetId, txHash, cid) tuple).
     // Used by the first-run snapshot and, later, operator-added entries.
     void insertPermanentAsset(const std::string& assetId,
@@ -61,6 +77,23 @@ public:
     unsigned int countTotalNodes();
     unsigned int countPermanentAssets();
     unsigned int countPermanentPages();
+
+    // Phase 3: payout support.
+    // Returns (peerId, payoutAddress) pairs for nodes eligible for payout:
+    // lastVerifyOk within last 24h AND verifyFails < 3 AND lastSeen within 7 days.
+    struct PayoutTarget {
+        std::string peerId;
+        std::string payoutAddress;
+    };
+    std::vector<PayoutTarget> getVerifiedPayoutTargets();
+
+    // Record a completed payout in the ledger.
+    void recordPayout(const std::string& payoutAddress, int64_t amountDgbSat,
+                      const std::string& txid);
+
+    // Ledger totals for dashboard display.
+    double getPaidTotalDgb();        // sum of all paid-out DGB
+    unsigned int getPaidCount();     // number of payout transactions
 
     // Pool-local config key/value store (separate from the operator's
     // editable pool.cfg; this is runtime state like "last snapshot time").

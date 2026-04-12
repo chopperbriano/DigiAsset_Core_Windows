@@ -378,6 +378,15 @@ vector<string> IPFS::extractAddresses(const string& idString) {
     return addresses;
 }
 
+string IPFS::extractIdField(const string& idString) {
+    Json::Value root;
+    Json::Reader reader;
+    if (!reader.parse(idString, root)) return "";
+    if (root.isMember("ID") && root["ID"].isString()) return root["ID"].asString();
+    if (root.isMember("id") && root["id"].isString()) return root["id"].asString();
+    return "";
+}
+
 
 /*
  ██████╗ █████╗ ██╗     ██╗     ██████╗  █████╗  ██████╗██╗  ██╗███████╗
@@ -582,6 +591,38 @@ string IPFS::getPeerId() const {
     //get list of addresses for the ipfs node
     std::string idString = _command("id");
     auto addresses = extractAddresses(idString);
+
+    // Filter out any address whose trailing "/p2p/<id>" segment does NOT
+    // match the local node's own ID. Without this filter, the upstream
+    // /id response can contain addresses of peers the local Kubo is
+    // connected to (especially on older Kubo versions or when Relay is
+    // enabled) and findPublicAddress's priority-3 fabrication path can
+    // accidentally return a bootstrap node's multiaddr as "ours".
+    // See memory/project_peerid_bootstrap_bug.md for the history.
+    std::string localId = extractIdField(idString);
+    if (!localId.empty()) {
+        const std::string marker = "/p2p/" + localId;
+        std::vector<std::string> filtered;
+        for (const auto& addr: addresses) {
+            // An address is "ours" if it contains /p2p/<localId>, either at
+            // the end (direct) or in the middle with a /p2p-circuit/ relay
+            // after it (e.g. /ip4/X/tcp/Y/p2p/RELAY/p2p-circuit/p2p/US).
+            // Accept both cases — the final /p2p/<localId> must be present.
+            // Simplest check: address ENDS in marker, OR contains marker
+            // preceded by /p2p-circuit.
+            if (addr.size() >= marker.size() &&
+                addr.compare(addr.size() - marker.size(), marker.size(), marker) == 0) {
+                filtered.push_back(addr);
+            }
+        }
+        if (!filtered.empty()) {
+            return findPublicAddress(filtered, ip);
+        }
+        // Nothing in the /id response clearly identifies us. Fall back to
+        // returning just the bare peerId so at least the pool server has
+        // a stable identifier for this node.
+        return localId;
+    }
 
     //find the one that best represents the public ip address
     return findPublicAddress(addresses, ip);
