@@ -19,7 +19,11 @@
 
 
 
-#include <boost/asio.hpp>
+// Specific sub-headers, not <boost/asio.hpp>, because the latter is shadowed
+// by the no-op stub at src/boost/asio.hpp on this fork's include path.
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <jsonrpccpp/server.h>
 #include <string>
 // #include <jsonrpccpp/server/connectors/httpserver.h>
@@ -38,6 +42,12 @@ namespace RPC {
         std::atomic<uint64_t> _callCounter{0};
 
         boost::asio::io_context _io{};
+        // Work guard keeps _io::run() from returning when the queue is empty.
+        // MUST be a member so it outlives construction — previously it was a
+        // local in the ctor, which meant the thread pool ran for a few
+        // microseconds and then exited the moment the ctor returned, leaving
+        // posted work with nothing to execute it.
+        boost::asio::executor_work_guard<boost::asio::io_context::executor_type> _workGuard;
         std::vector<std::thread> _thread_pool;
 
         tcp::acceptor _acceptor;

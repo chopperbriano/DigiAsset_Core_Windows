@@ -83,6 +83,33 @@ private:
     std::chrono::steady_clock::time_point _lastPspCheck;
     void checkPspRegistration();
 
+    // IPFS bitswap stats: are we actually serving content out to peers?
+    // pollBitswapStats() POSTs to <ipfspath>stats/bitswap every ~30s from a
+    // detached thread. BlocksSent is a monotonic counter — we diff against
+    // the previous reading to compute the rate.
+    std::mutex _bitswapMutex;
+    bool _bitswapProbed = false;
+    bool _bitswapAvailable = false; // false if IPFS API unreachable
+    uint64_t _bitswapBlocksSent = 0;
+    uint64_t _bitswapDataSent = 0;
+    uint64_t _bitswapBlocksSentPrev = 0;
+    std::chrono::steady_clock::time_point _bitswapPrevTime;
+    double _bitswapBlocksPerMin = 0.0;
+    std::chrono::steady_clock::time_point _lastBitswapPoll;
+    void pollBitswapStats();
+
+    // Permanent-list coverage check: download mctrivia's /permanent/<page>.json
+    // pages 0..N, extract every assetId mctrivia tracks, and query the local
+    // assets table to count how many we have. A healthy node should have
+    // 100% coverage — every PSP-enrolled issuance on-chain should appear in
+    // both lists. Missing assetIds indicate a chain-analyzer bug or lost sync.
+    std::mutex _coverageMutex;
+    bool _coverageChecked = false;
+    unsigned int _coverageTrackedCount = 0;   // total assetIds in mctrivia's permanent pages
+    unsigned int _coverageHaveCount = 0;      // of those, how many are in our local db
+    std::chrono::steady_clock::time_point _lastCoverageCheck;
+    void checkPermanentCoverage();
+
     // Cached asset count (refreshed every 5 seconds)
     uint64_t _assetCount = 0;
     std::chrono::steady_clock::time_point _lastAssetCountTime;

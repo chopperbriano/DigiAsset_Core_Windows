@@ -26,6 +26,7 @@ namespace RPC {
         extern const Response getencryptedkey(const Json::Value& params);
         extern const Response getexchangerates(const Json::Value& params);
         extern const Response getipfscount(const Json::Value& params);
+        extern const Response getnodestats(const Json::Value& params);
         extern const Response getoldstreamkey(const Json::Value& params);
         extern const Response getpsp(const Json::Value& params);
         extern const Response getrandom(const Json::Value& params);

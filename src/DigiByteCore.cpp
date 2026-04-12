@@ -90,11 +90,25 @@ void DigiByteCore::makeConnection() {
 
     //see if core is online and config if valid
     try {
-        httpClient.reset(new jsonrpc::HttpClient(
+        // Build the JSON-RPC URL separately so we can log it at DEBUG, and so
+        // the cli can `-v` itself by enabling DEBUG-level output. libcurl
+        // error 6 ("couldn't resolve host") against this URL usually means
+        // rpcbind, rpcuser, or rpcpassword has a character that breaks the
+        // libcurl URL parser — worth seeing the exact string in the log.
+        std::string rpcUrl =
                 "http://" + config.getString("rpcuser") + ":" +
                 config.getString("rpcpassword") + "@" +
                 config.getString("rpcbind", "127.0.0.1") + ":" +
-                std::to_string(_useAssetPort ? config.getInteger("rpcassetport", 14024) : config.getInteger("rpcport", 14022))));
+                std::to_string(_useAssetPort ? config.getInteger("rpcassetport", 14024) : config.getInteger("rpcport", 14022));
+        // Diagnostic hook: set DGBCORE_DEBUG_URL=1 to print the JSON-RPC URL
+        // to stderr on connect. Useful when debugging libcurl errors like
+        // "couldn't resolve host" that usually mean a character in
+        // rpcuser/rpcpassword/rpcbind broke the URL parser. Using cerr
+        // directly (not Log) because the cli doesn't link Log.cpp.
+        if (std::getenv("DGBCORE_DEBUG_URL")) {
+            std::cerr << "DGBCORE_URL=" << rpcUrl << std::endl;
+        }
+        httpClient.reset(new jsonrpc::HttpClient(rpcUrl));
         client.reset(new jsonrpc::Client(*httpClient, jsonrpc::JSONRPC_CLIENT_V1));
         httpClient->SetTimeout(config.getInteger("rpctimeout", 50000));
         if (!_useAssetPort) getblockcount();

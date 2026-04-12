@@ -11,8 +11,19 @@
 #include "Version.h"
 #include "utils.h"
 #include <algorithm>
-#include <boost/asio.hpp>
+// Include specific boost::asio sub-headers rather than <boost/asio.hpp>.
+// src/boost/asio.hpp is a no-op stub on this fork's include path — including
+// the top-level header gets the stub, which silently breaks all socket ops.
+// Including individual sub-headers bypasses the stub because the stub only
+// shadows <boost/asio.hpp>, not <boost/asio/*.hpp>. Also need the real boost
+// include path added via compile_flags in CMakeLists.txt.
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/write.hpp>
 #include <iostream>
+#include <sstream>
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
 #include <memory>
@@ -97,19 +108,30 @@ namespace RPC {
     ███████║███████╗   ██║   ╚██████╔╝██║
     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝
      */
-    Server::Server(const string& fileName) : _io() {
+    Server::Server(const string& fileName)
+        : _io(),
+          _workGuard(boost::asio::make_work_guard(_io)),
+          _acceptor(_io) {
+        // _workGuard is a MEMBER now, not a local. Previously this was:
+        //     auto work = boost::asio::make_work_guard(_io);
+        // inside the ctor body, which meant the work guard was destroyed the
+        // moment the ctor returned. With no work guard, _io.run() on every
+        // pool thread returned immediately because the queue was empty, the
+        // thread pool emptied, and any boost::asio::post() from accept() had
+        // no worker threads to run it. Making it a member keeps _io alive
+        // for the full lifetime of Server and keeps the pool actually running.
+        //
+        // _acceptor is also in the init list because real boost::asio's
+        // basic_socket_acceptor has no default constructor — the previous
+        // stub header at src/boost/asio.hpp did have one (that no-op'd every
+        // operation), which is exactly why RPC never actually listened.
         Log* log = Log::GetInstance();
-
-        _acceptor = tcp::acceptor(_io);
 
         try {
             Config config = Config(fileName);
             _username = config.getString("rpcuser");
             _password = config.getString("rpcpassword");
             _port = config.getInteger("rpcassetport", 14024);
-
-            // Create work to keep io_ running
-            auto work = boost::asio::make_work_guard(_io);
 
             // Create a pool of threads to run all of the io_services.
             size_t poolSize = config.getInteger("rpcthreads", 16);
@@ -118,10 +140,29 @@ namespace RPC {
             }
 
             tcp::endpoint endpoint(tcp::v4(), _port);
+            log->addMessage("RPC::Server ctor: opening acceptor on port " + std::to_string(_port), Log::INFO);
             _acceptor.open(endpoint.protocol());
+            log->addMessage("RPC::Server ctor: open() returned", Log::INFO);
             _acceptor.set_option(tcp::acceptor::reuse_address(true));
+            log->addMessage("RPC::Server ctor: set_option() returned", Log::INFO);
             _acceptor.bind(endpoint);
+            log->addMessage("RPC::Server ctor: bind() returned", Log::INFO);
             _acceptor.listen();
+            log->addMessage("RPC::Server ctor: listen() returned", Log::INFO);
+
+            // Ask boost what it thinks the acceptor is bound to. If listen
+            // succeeded but the endpoint is bogus or the native socket is
+            // invalid, this will disagree with our expectations.
+            try {
+                auto le = _acceptor.local_endpoint();
+                std::ostringstream oss;
+                oss << "RPC::Server ctor: local_endpoint = " << le.address().to_string()
+                    << ":" << le.port() << " is_open=" << _acceptor.is_open()
+                    << " native=" << (long long)_acceptor.native_handle();
+                log->addMessage(oss.str(), Log::INFO);
+            } catch (const std::exception& e) {
+                log->addMessage(std::string("RPC::Server ctor: local_endpoint() threw: ") + e.what(), Log::CRITICAL);
+            }
 
             _allowedRPC = config.getBoolMap("rpcallow");
             _showParamsOnError = config.getBool("rpcdebugshowparamsonerror", false);
@@ -157,6 +198,13 @@ namespace RPC {
         } catch (...) {
             log->addMessage("RPC server stopped with unknown error", Log::CRITICAL);
         }
+        // start() returning means accept() exited, which means the whole
+        // accept loop is dead and this server will never receive another
+        // request. Clear the AppMain pointer so the dashboard can report
+        // honestly that RPC is down, instead of showing a stale green
+        // "Port 14024" from a dangling raw pointer that used to be alive.
+        log->addMessage("RPC Server accept loop exited (socket closed)", Log::CRITICAL);
+        AppMain::GetInstance()->setRpcServer(nullptr);
     }
 
     /*

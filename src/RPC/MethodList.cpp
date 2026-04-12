@@ -20,6 +20,7 @@ namespace RPC {
         {"getencryptedkey", Methods::getencryptedkey},
         {"getexchangerates", Methods::getexchangerates},
         {"getipfscount", Methods::getipfscount},
+        {"getnodestats", Methods::getnodestats},
         {"getoldstreamkey", Methods::getoldstreamkey},
         {"getpsp", Methods::getpsp},
         {"getrandom", Methods::getrandom},

@@ -65,6 +65,15 @@ find_package(CURL)
 include_directories("${CMAKE_SOURCE_DIR}/jsoncpp/install/include")
 include_directories("${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/include")
 
+# Real boost headers. Without this, any file that includes <boost/asio/*.hpp>
+# (Server.cpp, WebServer.cpp, etc.) can't find the headers at all, and files
+# that include <boost/asio.hpp> silently resolve to the no-op stub at
+# src/boost/asio.hpp — which for the RPC server silently no-op'd every
+# socket operation and meant the server never actually listened.
+if(WIN32 AND MSVC)
+    include_directories(BEFORE "${CMAKE_SOURCE_DIR}/packages/boost.1.82.0/lib/native/include")
+endif()
+
 #add_library(ldigibyteapi STATIC IMPORTED)
 add_library(lsqlite3 STATIC IMPORTED)
 add_library(llibcurl STATIC IMPORTED)
@@ -105,6 +114,7 @@ set(HEADER_FILES
         AppMain.h
         CurlHandler.h
         ConsoleDashboard.h
+        NodeStats.h
         WebServer.h
         Version.h
         OldStream.h
@@ -148,6 +158,7 @@ set(SOURCE_FILES
         AppMain.cpp
         CurlHandler.cpp
         ConsoleDashboard.cpp
+        NodeStats.cpp
         WebServer.cpp
         OldStream.cpp
         UniqueTaskQueue.cpp
@@ -168,9 +179,12 @@ set(SOURCE_FILES
 
 add_executable(DigiAssetCore main.cpp ${SOURCE_FILES} ${HEADER_FILES} ${RPC_METHODS_FILES})
 
-# WebServer.cpp needs real Boost Beast headers (not the stub in src/boost/)
+# WebServer.cpp AND RPC/Server.cpp both need real Boost Beast / boost::asio
+# headers, not the no-op stub in src/boost/. The stub makes everything compile
+# but silently never binds any sockets — which is how RPC on the Windows port
+# looked green on the dashboard but never actually listened on 14024.
 if(WIN32 AND MSVC)
-  set_source_files_properties(WebServer.cpp PROPERTIES
+  set_source_files_properties(WebServer.cpp RPC/Server.cpp PROPERTIES
     COMPILE_FLAGS "/I\"${CMAKE_SOURCE_DIR}/packages/boost.1.82.0/lib/native/include\"")
 endif()
 

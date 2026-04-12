@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "CurlHandler.h"
 #include "Log.h"
+#include "NodeStats.h"
 #include "PermanentStoragePool/pools/mctrivia.h"
 #include "Version.h"
 #include <iostream>
@@ -188,29 +189,126 @@ void ConsoleDashboard::processInput() {
             case 'h':
             case 'H':
             case '?':
-                // Show system info in log
+                // Dump a plain-English explanation of every dashboard row and
+                // what the current numbers mean, so a first-time operator
+                // understands what their node is doing without needing the
+                // README or asking anywhere.
                 {
                     Log* log = Log::GetInstance();
                     AppMain* app = AppMain::GetInstance();
-                    log->addMessage("--- System Info ---");
+
+                    log->addMessage("=== What this node is doing ===");
                     log->addMessage("Version: " + getProductVersionString() + " (upstream " + getUpstreamVersionString() + ")");
-                    Database* hdb = app->getDatabaseIfSet();
-                    if (hdb) {
-                        log->addMessage("Assets on chain: " + formatNumber(hdb->getAssetCountOnChain()));
-                    }
+
+                    // --- Block sync ---
+                    log->addMessage("");
+                    log->addMessage("-- Block sync --");
                     ChainAnalyzer* ha = app->getChainAnalyzerIfSet();
                     if (ha) {
-                        log->addMessage("Sync height: " + formatNumber(ha->getSyncHeight()));
+                        log->addMessage("Block: " + formatNumber(ha->getSyncHeight()) + " (your local chain analyzer has processed");
+                        log->addMessage("  up to this DigiByte block). 'Fully Synced' means your local DigiByte Core");
+                        log->addMessage("  and our analyzer are both at the current chain tip.");
                     }
-                    WebServer* hw = app->getWebServerIfSet();
-                    if (hw) {
-                        log->addMessage("Web UI: http://localhost:" + std::to_string(hw->getPort()) + "/");
-                        std::string ip = hw->getExternalIP();
-                        if (!ip.empty() && ip != "unknown") {
-                            log->addMessage("External IP: " + ip);
+
+                    // --- Assets ---
+                    log->addMessage("");
+                    log->addMessage("-- Asset index --");
+                    Database* hdb = app->getDatabaseIfSet();
+                    uint64_t localCount = 0;
+                    if (hdb) localCount = hdb->getAssetCountOnChain();
+                    unsigned int tracked = 0;
+                    unsigned int have = 0;
+                    bool covChecked = false;
+                    {
+                        std::lock_guard<std::mutex> lk(_coverageMutex);
+                        tracked = _coverageTrackedCount;
+                        have = _coverageHaveCount;
+                        covChecked = _coverageChecked;
+                    }
+                    log->addMessage("Local count: " + formatNumber(localCount) +
+                                    " - every DigiAsset issuance your chain analyzer has");
+                    log->addMessage("  seen on-chain and stored in the local assets table. Includes NFTs, fungible");
+                    log->addMessage("  tokens, DigiByte Domain records (the DName/DDesk ones), and old pre-PSP assets.");
+                    if (covChecked) {
+                        log->addMessage("Tracked: " + std::to_string(tracked) +
+                                        " - the subset that enrolled in mctrivia's Permanent Storage");
+                        log->addMessage("  Pool at issuance time. This is what /permanent/<page>.json on the pool server");
+                        log->addMessage("  lists. It is ALWAYS smaller than local count because PSP enrollment is opt-in.");
+                        if (tracked > 0) {
+                            double pct = 100.0 * (double)have / (double)tracked;
+                            char pctBuf[32];
+                            snprintf(pctBuf, sizeof(pctBuf), "%.1f%%", pct);
+                            log->addMessage("Coverage: " + std::to_string(have) + "/" +
+                                            std::to_string(tracked) + " (" + pctBuf +
+                                            ") - of the tracked list, how many are");
+                            log->addMessage("  in your local db. 100% is strong evidence your chain analyzer is not");
+                            log->addMessage("  missing any issuances, because PSP and non-PSP assets go through the");
+                            log->addMessage("  same parse path. If this is below 100%, missing assetIds are logged");
+                            log->addMessage("  at WARNING level in the main log stream.");
                         }
                     }
-                    log->addMessage("Keys: Q=Quit  A=Assets  P=Port check  L=Log level  F=Fix IPFS announce  V=Verify multiaddrs  H=This info");
+
+                    // --- Serving ---
+                    log->addMessage("");
+                    log->addMessage("-- Serving --");
+                    bool available;
+                    uint64_t blocksSent;
+                    uint64_t dataSent;
+                    double rate;
+                    {
+                        std::lock_guard<std::mutex> lk(_bitswapMutex);
+                        available = _bitswapAvailable;
+                        blocksSent = _bitswapBlocksSent;
+                        dataSent = _bitswapDataSent;
+                        rate = _bitswapBlocksPerMin;
+                    }
+                    if (available) {
+                        log->addMessage("Blocks sent: " + formatNumber(blocksSent) +
+                                        " - number of IPFS blocks (small chunks of file data)");
+                        log->addMessage("  your node has served out to other IPFS peers since startup. This is measured");
+                        log->addMessage("  directly from Kubo's bitswap stats and proves your node is actively supplying");
+                        log->addMessage("  content to the network, not just storing it.");
+                        char rateBuf[64];
+                        snprintf(rateBuf, sizeof(rateBuf), "%.1f", rate);
+                        log->addMessage(std::string("Rate: ") + rateBuf + " blocks/min over the last 30-second poll window.");
+                        log->addMessage("  0.0 is normal if nobody is currently requesting content from you.");
+                    } else {
+                        log->addMessage("IPFS API was unreachable on the last poll - make sure IPFS Desktop is");
+                        log->addMessage("  running and accepting HTTP API calls on localhost:5001.");
+                    }
+
+                    // --- Pool ---
+                    log->addMessage("");
+                    log->addMessage("-- PSP Pool / Payment --");
+                    log->addMessage("Hosting pool files: your node is pinning (storing) the canonical list of");
+                    log->addMessage("  DigiAsset metadata files mctrivia's server tracks. Other DigiAsset clients can");
+                    log->addMessage("  fetch them from you via IPFS. You are contributing storage to the network.");
+                    log->addMessage("Payment unavailable: mctrivia's pool payout server (the part that would send you");
+                    log->addMessage("  DGB for hosting) has been broken since roughly July 2024 and the pool operator");
+                    log->addMessage("  is uncontactable. No client can currently collect payments. Your node will");
+                    log->addMessage("  automatically start receiving DGB if the server is ever fixed.");
+
+                    // --- Web UI / RPC / Ports ---
+                    log->addMessage("");
+                    log->addMessage("-- Services --");
+                    WebServer* hw = app->getWebServerIfSet();
+                    if (hw) {
+                        log->addMessage("Web UI: http://localhost:" + std::to_string(hw->getPort()) +
+                                        "/ - browse local node in a browser");
+                        std::string ip = hw->getExternalIP();
+                        if (!ip.empty() && ip != "unknown") {
+                            log->addMessage("External IP: " + ip + " - what the internet sees you as");
+                        }
+                    }
+                    log->addMessage("RPC Server: JSON-RPC endpoint on port 14024 for DigiAssetCore-cli.exe commands.");
+                    log->addMessage("  Try: DigiAssetCore-cli.exe getnodestats");
+
+                    // --- Keys ---
+                    log->addMessage("");
+                    log->addMessage("-- Keys --");
+                    log->addMessage("Q=Quit  A=Assets  P=Port check  L=Log level  F=Fix IPFS announce");
+                    log->addMessage("V=Verify multiaddrs  H=This info");
+                    log->addMessage("=== end info ===");
                 }
                 break;
             default:
@@ -260,6 +358,40 @@ void ConsoleDashboard::render() {
         auto elapsed = std::chrono::duration<double>(now - _lastPspCheck).count();
         if (elapsed >= 600.0 || _pspStatus.empty()) {
             std::thread([this]() { checkPspRegistration(); }).detach();
+        }
+    }
+
+    // Poll IPFS bitswap stats every 30s so the "Serving:" row has a recent
+    // block-count and rate to display. The first poll seeds the baseline and
+    // reports 0 rate; subsequent polls compute delta.
+    //
+    // Race note: _lastBitswapPoll is default-initialized to epoch, so on the
+    // first render `elapsed` is enormous and we fire immediately. We then
+    // update _lastBitswapPoll to `now` BEFORE spawning. That's the full
+    // spawn-race guard — do NOT additionally check `!_bitswapProbed`, because
+    // the detached thread can take a second or two to actually set _probed,
+    // and during that window every 500ms render would spawn a duplicate probe.
+    {
+        std::lock_guard<std::mutex> lock(_bitswapMutex);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration<double>(now - _lastBitswapPoll).count();
+        if (elapsed >= 30.0) {
+            _lastBitswapPoll = now;
+            std::thread([this]() { pollBitswapStats(); }).detach();
+        }
+    }
+
+    // Permanent-list coverage check every 10 minutes. Walks all of
+    // /permanent/*.json and diffs against the local assets table. Same
+    // spawn-race guard notes as bitswap above — _lastCoverageCheck starts at
+    // epoch so the first render fires automatically.
+    {
+        std::lock_guard<std::mutex> lock(_coverageMutex);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration<double>(now - _lastCoverageCheck).count();
+        if (elapsed >= 600.0) {
+            _lastCoverageCheck = now;
+            std::thread([this]() { checkPermanentCoverage(); }).detach();
         }
     }
     // Run IPFS announce diagnosis in background.
@@ -618,6 +750,83 @@ void ConsoleDashboard::render() {
         }
     }
 
+    // Row: Serving. Proves to the operator that blocks are actively flowing
+    // out to peers via IPFS bitswap. BlocksSent is a kubo monotonic counter;
+    // we diff against the previous snapshot to compute the rate.
+    {
+        bool available;
+        bool probed;
+        uint64_t blocksSent;
+        uint64_t dataSent;
+        double rate;
+        {
+            std::lock_guard<std::mutex> lock(_bitswapMutex);
+            available = _bitswapAvailable;
+            probed = _bitswapProbed;
+            blocksSent = _bitswapBlocksSent;
+            dataSent = _bitswapDataSent;
+            rate = _bitswapBlocksPerMin;
+        }
+
+        std::string lp3 = std::string("Serving:") + std::string(COL1_LABEL_W - 8, ' ');
+        out << ERASE_LINE << "  " << lp3;
+        if (!probed) {
+            out << FG_CYAN << "checking..." << RESET;
+        } else if (!available) {
+            out << FG_YELLOW << "IPFS API unreachable" << RESET;
+        } else {
+            // Format DataSent as KB/MB/GB.
+            auto formatBytes = [](uint64_t b) -> std::string {
+                char buf[64];
+                if (b < 1024ull) { snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)b); }
+                else if (b < 1024ull * 1024) { snprintf(buf, sizeof(buf), "%.1f KB", b / 1024.0); }
+                else if (b < 1024ull * 1024 * 1024) { snprintf(buf, sizeof(buf), "%.1f MB", b / (1024.0 * 1024.0)); }
+                else { snprintf(buf, sizeof(buf), "%.2f GB", b / (1024.0 * 1024.0 * 1024.0)); }
+                return std::string(buf);
+            };
+
+            const char* color = (blocksSent > 0) ? FG_GREEN : FG_YELLOW;
+            out << color << formatNumber(blocksSent) << " blocks sent" << RESET;
+            char rateBuf[64];
+            snprintf(rateBuf, sizeof(rateBuf), " (%.1f/min, %s)",
+                     rate, formatBytes(dataSent).c_str());
+            out << DIM << rateBuf << RESET;
+        }
+        out << "\n"; totalRows++;
+    }
+
+    // Row: Asset index. Shows local asset count + coverage vs the subset of
+    // assets mctrivia's permanent list tracks. 100% = chain analyzer is
+    // definitely detecting every PSP-enrolled issuance on-chain, which is
+    // strong evidence the analyzer is working end-to-end.
+    {
+        bool checked;
+        unsigned int tracked;
+        unsigned int have;
+        {
+            std::lock_guard<std::mutex> lock(_coverageMutex);
+            checked = _coverageChecked;
+            tracked = _coverageTrackedCount;
+            have = _coverageHaveCount;
+        }
+
+        std::string lp4 = std::string("Asset index:") + std::string(COL1_LABEL_W - 12, ' ');
+        out << ERASE_LINE << "  " << lp4
+            << FG_BRIGHT_WHITE << formatNumber(_assetCount) << " local" << RESET;
+        if (checked && tracked > 0) {
+            double pct = 100.0 * (double)have / (double)tracked;
+            const char* cvrColor = (have == tracked) ? FG_GREEN :
+                                   (pct >= 99.0)     ? FG_YELLOW : FG_RED;
+            char covBuf[96];
+            snprintf(covBuf, sizeof(covBuf), " / %u tracked / %.1f%% coverage",
+                     tracked, pct);
+            out << cvrColor << covBuf << RESET;
+        } else if (!checked) {
+            out << DIM << " / checking coverage..." << RESET;
+        }
+        out << "\n"; totalRows++;
+    }
+
     // Row: IPFS announce hint (conditional, only when there's actionable info)
     {
         std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
@@ -800,6 +1009,192 @@ void ConsoleDashboard::probeRpcServer() {
 }
 
 // ---- PSP registration status ------------------------------------------------
+
+// ---- IPFS bitswap stats poll -----------------------------------------------
+//
+// Answers "is this node actually serving DigiAsset content out to the
+// network?" by polling Kubo's stats/bitswap endpoint. BlocksSent is a
+// monotonic counter incremented every time we hand a block to a remote peer.
+// A non-zero rate proves outbound bitswap traffic is flowing.
+//
+// This only tests "serving something to someone"; it doesn't prove we're
+// reachable by arbitrary external nodes or that DigiAsset content specifically
+// is flowing. For that, see Part B (permanent-page coverage).
+void ConsoleDashboard::pollBitswapStats() {
+    // Can't call the file-local getIpfsApiBase() helper from here because it
+    // lives in an anonymous namespace defined later in this file. Inline.
+    std::string apiBase = "http://localhost:5001/api/v0/";
+    try {
+        Config config("config.cfg");
+        std::string p = config.getString("ipfspath", "http://localhost:5001/api/v0/");
+        if (!p.empty() && p.back() != '/') p += '/';
+        apiBase = p;
+    } catch (...) {}
+
+    uint64_t blocksSent = 0;
+    uint64_t dataSent = 0;
+    bool available = false;
+    try {
+        std::string body = CurlHandler::post(apiBase + "stats/bitswap", {}, 5000);
+        Json::Value root;
+        Json::Reader reader;
+        if (reader.parse(body, root)) {
+            if (root.isMember("BlocksSent")) blocksSent = root["BlocksSent"].asUInt64();
+            if (root.isMember("DataSent")) dataSent = root["DataSent"].asUInt64();
+            available = true;
+        }
+    } catch (...) {
+        available = false;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+
+    double rateToReport = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(_bitswapMutex);
+        if (available) {
+            // Compute rate: delta blocks / delta minutes. First probe seeds the
+            // baseline and reports 0.0 rate (we don't have a baseline to diff from).
+            if (_bitswapProbed) {
+                double elapsedMin = std::chrono::duration<double>(now - _bitswapPrevTime).count() / 60.0;
+                if (elapsedMin > 0.0 && blocksSent >= _bitswapBlocksSentPrev) {
+                    _bitswapBlocksPerMin = (double)(blocksSent - _bitswapBlocksSentPrev) / elapsedMin;
+                }
+            }
+            _bitswapBlocksSentPrev = blocksSent;
+            _bitswapPrevTime = now;
+            _bitswapBlocksSent = blocksSent;
+            _bitswapDataSent = dataSent;
+            rateToReport = _bitswapBlocksPerMin;
+        }
+        _bitswapAvailable = available;
+        _bitswapProbed = true;
+        _lastBitswapPoll = now;
+    }
+
+    // Mirror into NodeStats so the getnodestats RPC method returns fresh data
+    // without having to make its own HTTP call to kubo.
+    NodeStats::instance().setBitswap(available, blocksSent, dataSent, rateToReport);
+}
+
+// ---- Permanent-list coverage check -----------------------------------------
+//
+// Downloads mctrivia's /permanent/<page>.json pages (0..N, stopping when a
+// page returns the error envelope), extracts every unique assetId, and
+// queries the local Database to count how many we have. Reports coverage %.
+// A correctly-synced node running a correct chain analyzer should have 100%.
+//
+// Any missing assetIds are logged at WARNING so the user sees them in the
+// normal log stream — a <100% coverage is a real problem that indicates a
+// chain-analyzer bug or a failed sync range.
+void ConsoleDashboard::checkPermanentCoverage() {
+    Log* log = Log::GetInstance();
+
+    // Walk pages until we hit an error envelope. mctrivia's server returns
+    // {"error":"..."} beyond the highest populated page.
+    std::vector<std::string> trackedAssetIds;
+    for (unsigned int page = 0; page < 100; page++) {
+        std::string url = "https://ipfs.digiassetx.com/permanent/" +
+                          std::to_string(page) + ".json";
+        std::string body;
+        try {
+            body = CurlHandler::get(url, 10000);
+        } catch (...) {
+            break;
+        }
+
+        Json::Value root;
+        Json::Reader reader;
+        if (!reader.parse(body, root)) break;
+        if (root.isMember("error")) break;
+
+        // Extract unique assetIds from the "changes" keys. Each key is
+        // "<assetId>-<txhash>"; the assetId is everything before the first '-'.
+        if (root.isMember("changes") && root["changes"].isObject()) {
+            const Json::Value& changes = root["changes"];
+            for (auto it = changes.begin(); it != changes.end(); ++it) {
+                std::string key = it.key().asString();
+                size_t dash = key.find('-');
+                if (dash == std::string::npos) continue;
+                trackedAssetIds.push_back(key.substr(0, dash));
+            }
+        }
+    }
+
+    // Dedupe
+    std::sort(trackedAssetIds.begin(), trackedAssetIds.end());
+    trackedAssetIds.erase(std::unique(trackedAssetIds.begin(), trackedAssetIds.end()),
+                          trackedAssetIds.end());
+
+    unsigned int tracked = (unsigned int)trackedAssetIds.size();
+    unsigned int have = 0;
+    std::vector<std::string> missing;
+
+    // Query local db. Use getAssetIndex — returns assetIndex or throws if
+    // unknown. Database must be initialized for this to work; if not, bail
+    // out cleanly and retry next iteration.
+    Database* db = AppMain::GetInstance()->getDatabaseIfSet();
+    if (!db) {
+        std::lock_guard<std::mutex> lock(_coverageMutex);
+        _coverageChecked = false; // keep "probing" state
+        _lastCoverageCheck = std::chrono::steady_clock::now();
+        return;
+    }
+
+    // Use getAssetIndexes() which returns the full vector of matching rows.
+    // Non-empty = we have at least one row with this assetId. Empty or throw
+    // = missing. getAssetIndex() singular throws if there are multiple
+    // matches, which would give us false negatives on legitimate duplicates.
+    for (const std::string& assetId: trackedAssetIds) {
+        try {
+            auto indexes = db->getAssetIndexes(assetId);
+            if (!indexes.empty()) {
+                have++;
+            } else {
+                missing.push_back(assetId);
+            }
+        } catch (...) {
+            missing.push_back(assetId);
+        }
+    }
+
+    // Log any gap at WARNING so normal users notice without flipping to DEBUG.
+    if (!missing.empty()) {
+        log->addMessage("Permanent-list coverage: " + std::to_string(have) +
+                                "/" + std::to_string(tracked) +
+                                " (" + std::to_string(missing.size()) + " missing)",
+                        Log::WARNING);
+        // Cap the per-line noise: log up to 5 missing assetIds, then a summary.
+        size_t toShow = std::min<size_t>(5, missing.size());
+        for (size_t i = 0; i < toShow; i++) {
+            log->addMessage("  missing asset: " + missing[i], Log::WARNING);
+        }
+        if (missing.size() > toShow) {
+            log->addMessage("  ... and " + std::to_string(missing.size() - toShow) +
+                                    " more (enable DEBUG for the full list)",
+                            Log::WARNING);
+        }
+        for (size_t i = toShow; i < missing.size(); i++) {
+            log->addMessage("  missing asset: " + missing[i], Log::DEBUG);
+        }
+    } else if (tracked > 0) {
+        log->addMessage("Permanent-list coverage: " + std::to_string(have) +
+                                "/" + std::to_string(tracked) + " (100%)",
+                        Log::INFO);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(_coverageMutex);
+        _coverageTrackedCount = tracked;
+        _coverageHaveCount = have;
+        _coverageChecked = true;
+        _lastCoverageCheck = std::chrono::steady_clock::now();
+    }
+
+    // Mirror into NodeStats so the getnodestats RPC method can report coverage
+    // without having to re-walk all permanent pages.
+    NodeStats::instance().setCoverage(tracked, have);
+}
 
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
