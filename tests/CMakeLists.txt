@@ -12,6 +12,17 @@ else()
   set(CMAKE_CXX_STANDARD 11)
 endif()
 
+# Tests include src/RPC/Server.h which in turn pulls in real Boost.Asio
+# headers (executor_work_guard.hpp, etc.). The src/ target adds this
+# include path, but include_directories() is scoped to its own
+# subdirectory in cmake -- sibling subdirectories don't inherit. Add
+# the same path here so the test executables can find Boost headers.
+# Without this, every test target fails with
+#   C1083: Cannot open include file: 'boost/asio/executor_work_guard.hpp'
+if(WIN32 AND MSVC)
+    include_directories(BEFORE "${CMAKE_SOURCE_DIR}/packages/boost.1.82.0/lib/native/include")
+endif()
+
 
 set(TESTS
         BitIO.cpp
