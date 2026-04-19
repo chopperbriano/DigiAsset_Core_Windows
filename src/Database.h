@@ -454,6 +454,12 @@ public:
 
     //asset stats
     uint64_t getAssetCountOnChain();
+    // Highest assetIndex ever assigned in the assets table. This is the
+    // right number for paginating callers (explorer browse, index range
+    // enumeration) because listlastassets/listassets are keyed on
+    // assetIndex -- NOT on distinct assetId count, which getAssetCountOnChain
+    // returns and which silently drops reissuances.
+    uint64_t getMaxAssetIndex();
 
     //utxo table asset related
     AssetUTXO getAssetUTXO(const std::string& txid, unsigned int vout, unsigned int height = 0);

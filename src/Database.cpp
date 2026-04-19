@@ -1687,6 +1687,30 @@ uint64_t Database::getAssetCountOnChain() {
 }
 
 /**
+ * Highest assetIndex assigned in the assets table. Distinct from
+ * getAssetCountOnChain() -- that returns distinct assetIds (which
+ * undercounts reissuances by N-1), this returns the top row number
+ * which is what listlastassets/listassets pagination is keyed on.
+ *
+ * Paginating explorers should use THIS value as the total, not
+ * assetCount, so reissued-asset rows aren't silently clipped off the
+ * end of the newest-first listing.
+ *
+ * Uses COALESCE to return 0 on an empty table instead of SQL NULL.
+ */
+uint64_t Database::getMaxAssetIndex() {
+    sqlite3_stmt* stmt = nullptr;
+    uint64_t maxIndex = 0;
+    if (sqlite3_prepare_v2(_db, "SELECT COALESCE(MAX(assetIndex), 0) FROM assets", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            maxIndex = sqlite3_column_int64(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return maxIndex;
+}
+
+/**
  * Returns the total number assets that exist of this specific type.
  * The difference between this and the other getTotalAssetCount function is that if the asset has sub types this will only give total of the sub type provided
  * @param assetIndex

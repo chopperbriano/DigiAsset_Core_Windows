@@ -6,7 +6,15 @@
 // Fields:
 //   buildVersion       - e.g. "0.3.0-win.31"
 //   syncHeight         - chain analyzer's current block height
-//   assetCount         - total DigiAsset issuances in local database
+//   assetCount         - distinct assetIds in local database (SELECT
+//                        COUNT(DISTINCT assetId) FROM assets). This
+//                        undercounts when the same assetId has been
+//                        reissued N times -- see topAssetIndex for the
+//                        pagination-correct number.
+//   topAssetIndex      - highest assetIndex assigned (MAX(assetIndex)
+//                        FROM assets). This is what listlastassets /
+//                        listassets are keyed on, so paginating
+//                        explorers should use this as the total.
 //   bitswap:
 //     available        - whether IPFS API was reachable on the last poll
 //     blocksSent       - monotonic count of blocks served out via bitswap
@@ -42,9 +50,12 @@ namespace RPC {
             ChainAnalyzer* analyzer = AppMain::GetInstance()->getChainAnalyzerIfSet();
             result["syncHeight"] = analyzer ? (Json::UInt)analyzer->getSyncHeight() : 0;
 
-            // Local asset count - pulled directly from db.
+            // Local asset count - pulled directly from db. "assetCount"
+            // keeps its distinct-assetId semantics for backward compat;
+            // "topAssetIndex" is the pagination-correct figure.
             Database* db = AppMain::GetInstance()->getDatabaseIfSet();
             result["assetCount"] = db ? (Json::UInt64)db->getAssetCountOnChain() : 0;
+            result["topAssetIndex"] = db ? (Json::UInt64)db->getMaxAssetIndex() : 0;
 
             // Bitswap + coverage come from NodeStats, which the dashboard's
             // background pollers populate. If the dashboard hasn't run a
