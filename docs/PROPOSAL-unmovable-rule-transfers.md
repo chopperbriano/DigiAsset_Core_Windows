@@ -3,7 +3,9 @@
 **Branch:** `upstream/refuse-unmovable-rule-transfers`, based on `asset_features` @ `fb3aa1d`
 **Scope:** one function and one call site in `src/AssetWallet.cpp`
 **Consensus impact:** none — see [§4](#4-why-this-is-not-a-consensus-change)
+**Status:** compiled and verified on mainnet by Ray, 2026-09-06 — see [§5](#5-testing)
 **Reported by:** Ray, [Brasa Studios](https://brasastudios.games) — see [§7](#7-credit)
+**Upstream issue:** [DigiAsset_Core#29](https://github.com/DigiAsset-Core/DigiAsset_Core/issues/29)
 
 ---
 
@@ -141,7 +143,24 @@ that is safe to take immediately.
 has and has not been run, because a proposal that overstates its testing is
 worse than one that admits gaps.
 
-**Verified**
+### Verified on mainnet by Ray, 2026-09-06
+
+This branch was originally offered as API-correct and reviewed by eye, with no
+build behind it. Ray closed that gap himself:
+
+- compiled this branch on Ubuntu 22.04 — clean build, guard present in the
+  binary;
+- issued a **fresh** royalty-ruled asset on mainnet (5401);
+- attempted `sendasset` of one unit through the patched daemon.
+
+Result: refused with the rule message, **no txid, supply unchanged before and
+after, nothing in the mempool**. Same wallet, same chain, same rule as the
+asset destroyed on 27 August — the patch is the only variable that changed.
+
+So the claim is no longer "reviewed by eye". It is tested, by the person who
+found the defect, against a live asset he issued for the purpose.
+
+**Verified by inspection**
 
 - Every API the patch uses exists on this branch unmodified:
   `DigiAssetRules::empty`, `getIfRequiresRoyalty`, `getRequiredBurn`,
@@ -153,17 +172,15 @@ worse than one that admits gaps.
   incident. That fork's `AssetWallet.cpp` has diverged from this branch, which
   is why this is a fresh patch against your code rather than a cherry-pick.
 
-**NOT verified — we have not compiled this branch**
+**Still NOT verified**
 
-- **No build has been run against `asset_features`.** Our toolchain targets our
-  own fork; this branch has not been through it. Treat the patch as
-  API-correct and reviewed by eye, not as compiled.
-- **No test run.** The existing suite has not been executed against this
-  branch, with or without the patch.
-- **Only the royalty rule has a demonstrated victim.** Ray's asset proves that
-  one on mainnet. Deflation and required-signer are reasoned from the same code
-  path — the transfer builder adds no burn output and cannot guarantee signer
-  inputs — but neither has been reproduced.
+- **The existing test suite has not been run against this branch**, with or
+  without the patch. Ray's build was a compile and a live send, not a suite run.
+- **Only the royalty rule has a demonstrated victim.** Ray's assets prove that
+  one twice over — the destroyed one and the refused one. Deflation and
+  required-signer are reasoned from the same code path — the transfer builder
+  adds no burn output and cannot guarantee signer inputs — but neither has been
+  reproduced.
 - **The over-reach case is untested.** That an asset carrying a vote, KYC or
   expiry rule still builds a transfer normally is the regression that matters
   most (§3), and it has been reasoned about rather than exercised.
@@ -175,6 +192,46 @@ If you want any of the above closed before considering it, say which and we
 will do that work rather than ask you to take it on trust.
 
 ---
+
+## 5a. `reissueasset` is not covered, and should not be
+
+Ray noticed while reading the patch that the guard sits in `selectAssetInputs`,
+so it covers `sendasset`, `sendmanyassets` and `burnasset` — but
+`reissueasset` walks `AssetWallet::getWalletUTXOs` directly and never reaches
+it. He flagged the likely consequence as a royalty-ruled reissuance that
+silently creates nothing and costs a fee, and was careful to mark it "likely"
+rather than assert it.
+
+**The observation is exactly right. The consequence does not occur, for two
+independent reasons, and adding the guard there would be a regression.**
+
+First, rules are never checked on an issuance:
+
+```cpp
+//check rules where followed if there were any
+if (type != DIGIASSET_ISSUANCE) {
+    checkRulesPass();
+}
+```
+
+*(`DigiByteTransaction.cpp`, in `decodeAssetTransfer`.)* A reissuance decodes as
+`DIGIASSET_ISSUANCE`, so `exceptionRuleFailed` is never thrown and the clearing
+handler is never reached.
+
+Second, `reissueasset` selects its input with `utxo.assets.empty()` — it
+deliberately spends a plain-DGB UTXO at the issuer address. There are no asset
+inputs in the transaction, so there is nothing for the clearing handler to
+destroy even if it did run.
+
+So a royalty-ruled reissuance works normally today. Extending
+`assertTransferableAsset` to `reissueasset` would refuse a legitimate
+operation: an issuer with a royalty-ruled asset could no longer add supply to
+it. That is the same over-reach the vote/KYC/expiry exclusion in §3 exists to
+avoid, and it is recorded here so the gap is not "fixed" later by someone
+reading the patch and seeing an inconsistency.
+
+Worth stating plainly: Ray's instinct to flag rather than assert was the
+correct call, and checking it is what produced the line reference above.
 
 ## 6. If you would rather not take this
 
@@ -205,6 +262,18 @@ He offered to write and submit the fix himself. This branch exists because we
 already had the guard running in our fork and could put it in front of you
 today; the finding, the reproduction and the analysis of the two possible fixes
 are his.
+
+He then compiled this branch, issued a fresh royalty-ruled asset on mainnet to
+test it against, and confirmed the refusal — turning §5 from a set of claims
+into a result. He also read the patch closely enough to spot that
+`reissueasset` bypasses the guard (§5a), and flagged it as a possibility rather
+than asserting it, which is why that section could be answered precisely
+instead of argued about.
+
+He filed it upstream himself, as
+[issue #29](https://github.com/DigiAsset-Core/DigiAsset_Core/issues/29), and
+kept the indexer-side question separate for you to decide — which is the
+distinction §4 is about, and he reached it independently.
 
 He is building *Elements of War* on DigiAssets, which is how he came to be
 holding an asset with a royalty rule in the first place.
